@@ -172,7 +172,7 @@ app.layout = dbc.Container([
     # — Footer —
     dbc.Row(
         dbc.Col(
-            html.Div("Powered by STB • Luciano Sacaba", className="text-center text-muted small"),
+            html.Div("Powered by STA METHODOLOGIES • Luciano Sacaba", className="text-center text-muted small"),
             width=12
         )
     )
