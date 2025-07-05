@@ -232,16 +232,30 @@ def analyze_sag(contents, name):
     State("up-front", "filename")
 )
 def analyze_front(contents, name):
-    # ... validaciones idénticas ...
+    if not contents:
+        return ""
+    # Validar extensión
+    if Path(name).suffix.lower() not in ALLOWED:
+        return dbc.Alert("Formato no soportado", color="danger")
+
+    # <-- Aquí faltaba convertir el b64 a cv2:
+    img = b64_to_cv2(contents)
+
+    # Ahora sí llamas a tu función de frontal
     crop, vis, data = analyze_frontal(img)
+    if crop is None:
+        return dbc.Alert("No se detectó pose en la imagen", color="warning")
+
     vis_b64 = cv2_to_b64(vis)
     cards = [card(k, v) for k, v in data.items()]
 
     return html.Div([
         dbc.Row([
             dbc.Col(
-                html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
-                         style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}),
+                html.Img(
+                    src="data:image/jpg;base64," + cv2_to_b64(crop),
+                    style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}
+                ),
                 width=6
             ),
             dbc.Col([
@@ -254,15 +268,16 @@ def analyze_front(contents, name):
 
         dbc.Row(
             dbc.Col(
-                html.Img(src="data:image/jpg;base64," + vis_b64,
-                         style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}),
+                html.Img(
+                    src="data:image/jpg;base64," + vis_b64,
+                    style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}
+                ),
                 width={"size": 8, "offset": 2}
             )
         ),
 
         html.Div(create_zip(vis_b64, data, "analisis_frontal.zip"), className="mt-3")
     ])
-
 
 
 def get_download_link(img_b64, filename):
