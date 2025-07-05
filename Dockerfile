@@ -19,8 +19,8 @@ ENV PORT ${PORT:-8050}
 # Expone el puerto (opcional, Render no lo necesita explícito)
 EXPOSE ${PORT}
 
-# Arranca con Gunicorn (app:server es tu Dash app)
-CMD ["gunicorn", "app:server", "--bind", "0.0.0.0:${PORT}", "--log-file", "-"]
+# al final de Dockerfile
+CMD gunicorn app:server --bind 0.0.0.0:$PORT --log-file -
 
 
 
