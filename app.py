@@ -122,39 +122,61 @@ def analyze_frontal(img):
         "Muñeca izq": LWL[1], "Muñeca der": RWL[1], "Δ Muñeca (px)": RWL[1] - LWL[1]
     }
     return crop, vis, data
+
 server = Flask(__name__)
-app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.CYBORG])
-app.title = "OHS Analyzer - Lift Style"
+# Cambia el tema a algo más profesional
+app = dash.Dash(
+    __name__,
+    server=server,
+    external_stylesheets=[dbc.themes.FLATLY]
+)
+app.title = "Overhead-Squat Analyzer"
 
 app.layout = dbc.Container([
-    # — Logo centrado —
-    dbc.Row(
-        dbc.Col(
-            html.Img(src="/assets/angle.png",
-                     style={"height": "60px", "display":"block", "margin":"0 auto 20px"}),
-            width=12
-        )
+    # — Navbar con logo y título —
+    dbc.Navbar(
+        dbc.Container([
+            html.Img(src="/assets/angle.png", height="40px"),
+            dbc.NavbarBrand("OHS Analyzer", className="ms-2"),
+        ]),
+        color="light", dark=False, className="mb-4"
     ),
 
-    html.H2("Overhead-Squat Analyzer", className="text-center text-info mb-4"),
-
+    # — Sección de Subida —
     dbc.Row([
-        # Columna subida sagital
         dbc.Col([
-            html.H4("🦵 Sagital View", className="text-white"),
-            dcc.Upload(...),
+            html.H5("Sagittal View", className="text-secondary mb-2"),
+            dcc.Upload(
+                id="up-sag",
+                children=dbc.Button("Subir imagen SAGITAL", color="primary", className="w-100"),
+                multiple=False,
+                className="mb-3"
+            ),
             dbc.Spinner(html.Div(id="out-sag"))
         ], md=6),
-        # Columna subida frontal
+
         dbc.Col([
-            html.H4("🧍 Frontal View", className="text-white"),
-            dcc.Upload(...),
+            html.H5("Frontal View", className="text-secondary mb-2"),
+            dcc.Upload(
+                id="up-front",
+                children=dbc.Button("Subir imagen FRONTAL", color="primary", className="w-100"),
+                multiple=False,
+                className="mb-3"
+            ),
             dbc.Spinner(html.Div(id="out-front"))
         ], md=6),
-    ], className="mb-4"),
+    ], className="g-4"),
 
-    html.Footer("Powered by STB • Luciano Sacaba", className="text-center mt-4 text-muted")
-], fluid=True, className="p-4 bg-dark")
+    html.Hr(),
+
+    # — Footer —
+    dbc.Row(
+        dbc.Col(
+            html.Div("Powered by STB • Luciano Sacaba", className="text-center text-muted small"),
+            width=12
+        )
+    )
+], fluid=True)
 
 
 @app.callback(
