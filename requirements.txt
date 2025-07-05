@@ -6,4 +6,4 @@ opencv-python-headless
 numpy
 pandas
 xlsxwriter
-mediapipe==0.10.0
+mediapipe==0.10.21
