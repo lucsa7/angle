@@ -5,6 +5,7 @@ from dash import dcc, html, Input, Output, State
 from flask import Flask
 import zipfile, io
 import pandas as pd
+import os
 
 
 TMP_DIR = Path(tempfile.gettempdir()) / "ohs_tmp"; TMP_DIR.mkdir(exist_ok=True)
@@ -126,25 +127,35 @@ app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.CYBORG
 app.title = "OHS Analyzer - Lift Style"
 
 app.layout = dbc.Container([
+    # — Logo centrado —
+    dbc.Row(
+        dbc.Col(
+            html.Img(src="/assets/angle.png",
+                     style={"height": "60px", "display":"block", "margin":"0 auto 20px"}),
+            width=12
+        )
+    ),
+
     html.H2("Overhead-Squat Analyzer", className="text-center text-info mb-4"),
-    
+
     dbc.Row([
+        # Columna subida sagital
         dbc.Col([
             html.H4("🦵 Sagital View", className="text-white"),
-            dcc.Upload(id="up-sag", accept="image/*", multiple=False,
-                children=dbc.Button("📤 Subir imagen SAGITAL", color="primary", className="mb-3")),
+            dcc.Upload(...),
             dbc.Spinner(html.Div(id="out-sag"))
         ], md=6),
+        # Columna subida frontal
         dbc.Col([
             html.H4("🧍 Frontal View", className="text-white"),
-            dcc.Upload(id="up-front", accept="image/*", multiple=False,
-                children=dbc.Button("📤 Subir imagen FRONTAL", color="success", className="mb-3")),
+            dcc.Upload(...),
             dbc.Spinner(html.Div(id="out-front"))
-        ], md=6)
-    ]),
-    
+        ], md=6),
+    ], className="mb-4"),
+
     html.Footer("Powered by STB • Luciano Sacaba", className="text-center mt-4 text-muted")
 ], fluid=True, className="p-4 bg-dark")
+
 
 @app.callback(
     Output("out-sag", "children"),
@@ -163,15 +174,33 @@ def analyze_sag(contents, name):
     cards = [card(k, v) for k, v in data.items()]
 
     return html.Div([
+        # Imagen + métricas en la misma fila
         dbc.Row([
-            dbc.Col(html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
-                             style={"width": "100%", "borderRadius": "6px"}), md=6),
-            dbc.Col(html.Img(src="data:image/jpg;base64," + vis_b64,
-                             style={"width": "100%", "borderRadius": "6px"}), md=6)
-        ]),
-        html.Hr(),
-        dbc.Row(cards, className="flex-wrap"),
-        html.Div(create_zip(vis_b64, data, "analisis_sagital.zip"))
+            # Imagen original recortada
+            dbc.Col(
+                html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
+                         style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}),
+                width=6
+            ),
+            # Métricas
+            dbc.Col([
+                html.H5("Métricas", className="text-white"),
+                dbc.Row(cards, className="flex-column")
+            ], width=6, style={"maxHeight": "200px", "overflowY": "auto"})
+        ], align="start"),
+
+        html.Hr(className="border-secondary"),
+
+        # Imagen con contornos
+        dbc.Row(
+            dbc.Col(
+                html.Img(src="data:image/jpg;base64," + vis_b64,
+                         style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}),
+                width={"size": 8, "offset": 2}
+            )
+        ),
+
+        html.Div(create_zip(vis_b64, data, "analisis_sagital.zip"), className="mt-3")
     ])
 
 
@@ -181,27 +210,37 @@ def analyze_sag(contents, name):
     State("up-front", "filename")
 )
 def analyze_front(contents, name):
-    if not contents:
-        return ""
-    if Path(name).suffix.lower() not in ALLOWED:
-        return dbc.Alert("Formato no soportado", color="danger")
-
-    img = b64_to_cv2(contents)
+    # ... validaciones idénticas ...
     crop, vis, data = analyze_frontal(img)
     vis_b64 = cv2_to_b64(vis)
     cards = [card(k, v) for k, v in data.items()]
 
     return html.Div([
         dbc.Row([
-            dbc.Col(html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
-                             style={"width": "100%", "borderRadius": "6px"}), md=6),
-            dbc.Col(html.Img(src="data:image/jpg;base64," + vis_b64,
-                             style={"width": "100%", "borderRadius": "6px"}), md=6)
-        ]),
-        html.Hr(),
-        dbc.Row(cards, className="flex-wrap"),
-        html.Div(create_zip(vis_b64, data, "analisis_frontal.zip"))
+            dbc.Col(
+                html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
+                         style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}),
+                width=6
+            ),
+            dbc.Col([
+                html.H5("Métricas", className="text-white"),
+                dbc.Row(cards, className="flex-column")
+            ], width=6, style={"maxHeight": "400px", "overflowY": "auto"})
+        ], align="start"),
+
+        html.Hr(className="border-secondary"),
+
+        dbc.Row(
+            dbc.Col(
+                html.Img(src="data:image/jpg;base64," + vis_b64,
+                         style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}),
+                width={"size": 8, "offset": 2}
+            )
+        ),
+
+        html.Div(create_zip(vis_b64, data, "analisis_frontal.zip"), className="mt-3")
     ])
+
 
 
 def get_download_link(img_b64, filename):
@@ -232,8 +271,13 @@ def create_zip(img_b64, metrics_dict, zip_filename):
                   download=zip_filename, target="_blank",
                   className="btn btn-outline-info mt-2")
 
+
+
 if __name__ == "__main__":
-    app.run_server(debug=True, use_reloader=False)
+    port = int(os.environ.get("PORT", 8050))
+    app.run_server(host="0.0.0.0", port=port, debug=False)
+
+
 
 
 
