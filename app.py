@@ -99,16 +99,21 @@ def analyze_frontal(img):
     res = POSE.process(img)
     if not res.pose_landmarks:
         return None, None, None
+
+    # Crop to person and re-run pose on the crop
     lm = res.pose_landmarks.landmark
     crop = crop_person(img, lm)
     h, w = crop.shape[:2]
     lm = POSE.process(crop).pose_landmarks.landmark
+
+    # Convert normalized landmarks to pixel coords
     toP = lambda m: (int(m.x * w), int(m.y * h))
     SHL, SHR = toP(lm[P.LEFT_SHOULDER]), toP(lm[P.RIGHT_SHOULDER])
-    LHL, RHL = toP(lm[P.LEFT_HIP]), toP(lm[P.RIGHT_HIP])
-    LWL, RWL = toP(lm[P.LEFT_WRIST]), toP(lm[P.RIGHT_WRIST])
-    vis = crop.copy()
+    LHL, RHL = toP(lm[P.LEFT_HIP]),      toP(lm[P.RIGHT_HIP])
+    LWL, RWL = toP(lm[P.LEFT_WRIST]),    toP(lm[P.RIGHT_WRIST])
 
+    # Draw lines & points
+    vis = crop.copy()
     for a, b in [(SHL, LHL), (SHR, RHL), (SHL, LWL), (SHR, RWL)]:
         cv2.line(vis, a, b, IDEAL_RGBA[:3], 4, cv2.LINE_AA)
         cv2.circle(vis, a, 8, CLR_PT, -1, cv2.LINE_AA)
@@ -116,12 +121,21 @@ def analyze_frontal(img):
     for y in (SHL[1], SHR[1], LHL[1], RHL[1], LWL[1], RWL[1]):
         cv2.line(vis, (0, y), (w, y), CLR_LINE, 3, cv2.LINE_AA)
 
+    # Prepare metrics in English
     data = {
-        "Hombro izq": SHL[1], "Hombro der": SHR[1], "Δ Hombro (px)": SHR[1] - SHL[1],
-        "Cadera izq": LHL[1], "Cadera der": RHL[1], "Δ Cadera (px)": RHL[1] - LHL[1],
-        "Muñeca izq": LWL[1], "Muñeca der": RWL[1], "Δ Muñeca (px)": RWL[1] - LWL[1]
+        "Left Shoulder (px)":   SHL[1],
+        "Right Shoulder (px)":  SHR[1],
+        "Δ Shoulder (px)":      SHR[1] - SHL[1],
+        "Left Hip (px)":        LHL[1],
+        "Right Hip (px)":       RHL[1],
+        "Δ Hip (px)":           RHL[1] - LHL[1],
+        "Left Wrist (px)":      LWL[1],
+        "Right Wrist (px)":     RWL[1],
+        "Δ Wrist (px)":         RWL[1] - LWL[1]
     }
+
     return crop, vis, data
+
 
 server = Flask(__name__)
 # Cambia el tema a algo más profesional
@@ -148,7 +162,7 @@ app.layout = dbc.Container([
             html.H5("Sagittal View", className="text-secondary mb-2"),
             dcc.Upload(
                 id="up-sag",
-                children=dbc.Button("Subir imagen SAGITAL", color="primary", className="w-100"),
+                children=dbc.Button("Upload Sagittal Image", color="primary", className="w-100"),
                 multiple=False,
                 className="mb-3"
             ),
@@ -159,7 +173,7 @@ app.layout = dbc.Container([
             html.H5("Frontal View", className="text-secondary mb-2"),
             dcc.Upload(
                 id="up-front",
-                children=dbc.Button("Subir imagen FRONTAL", color="primary", className="w-100"),
+                children=dbc.Button("Upload Frontal Image", color="primary", className="w-100"),
                 multiple=False,
                 className="mb-3"
             ),
@@ -184,47 +198,58 @@ app.layout = dbc.Container([
     Input("up-sag", "contents"),
     State("up-sag", "filename")
 )
-def analyze_sag(contents, name):
+def analyze_sag(contents, filename):
     if not contents:
         return ""
-    if Path(name).suffix.lower() not in ALLOWED:
-        return dbc.Alert("Formato no soportado", color="danger")
+    # validate extension
+    if Path(filename).suffix.lower() not in ALLOWED:
+        return dbc.Alert("Unsupported format", color="danger")
 
+    # convert from base64 and run analysis
     img = b64_to_cv2(contents)
     crop, vis, data = analyze_sagital(img)
+
+    # prepare visuals
     vis_b64 = cv2_to_b64(vis)
     cards = [card(k, v) for k, v in data.items()]
 
     return html.Div([
-        # Imagen + métricas en la misma fila
+        # image + metrics side by side
         dbc.Row([
-            # Imagen original recortada
+            # cropped original
             dbc.Col(
-                html.Img(src="data:image/jpg;base64," + cv2_to_b64(crop),
-                         style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}),
+                html.Img(
+                    src=f"data:image/jpg;base64,{cv2_to_b64(crop)}",
+                    style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}
+                ),
                 width=6
             ),
-            # Métricas
+            # metrics
             dbc.Col([
-                html.H5("Métricas", className="text-white"),
+                html.H5("Metrics", className="text-white"),
                 dbc.Row(cards, className="flex-column")
             ], width=6, style={"maxHeight": "200px", "overflowY": "auto"})
         ], align="start"),
 
         html.Hr(className="border-secondary"),
 
-        # Imagen con contornos
+        # overlayed image
         dbc.Row(
             dbc.Col(
-                html.Img(src="data:image/jpg;base64," + vis_b64,
-                         style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}),
+                html.Img(
+                    src=f"data:image/jpg;base64,{vis_b64}",
+                    style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}
+                ),
                 width={"size": 8, "offset": 2}
             )
         ),
 
-        html.Div(create_zip(vis_b64, data, "analisis_sagital.zip"), className="mt-3")
+        # download zip
+        html.Div(
+            create_zip(vis_b64, data, "sagittal_analysis.zip"),
+            className="mt-3"
+        )
     ])
-
 
 @app.callback(
     Output("out-front", "children"),
@@ -259,7 +284,7 @@ def analyze_front(contents, name):
                 width=6
             ),
             dbc.Col([
-                html.H5("Métricas", className="text-white"),
+                html.H5("Metrics", className="text-white"),
                 dbc.Row(cards, className="flex-column")
             ], width=6, style={"maxHeight": "400px", "overflowY": "auto"})
         ], align="start"),
@@ -281,33 +306,43 @@ def analyze_front(contents, name):
 
 
 def get_download_link(img_b64, filename):
-    return html.A("⬇️ Descargar imagen", href="data:image/jpg;base64," + img_b64,
-                  download=filename, target="_blank", className="btn btn-outline-light mt-2")
-
+    return html.A(
+        "⬇️ Download image",
+        href=f"data:image/jpg;base64,{img_b64}",
+        download=filename,
+        target="_blank",
+        className="btn btn-outline-light mt-2"
+    )
 
 def create_zip(img_b64, metrics_dict, zip_filename):
+    # Decode image bytes
     img_bytes = base64.b64decode(img_b64)
 
-    # Crear Excel en memoria
+    # Build a DataFrame of metrics
+    df = pd.DataFrame(list(metrics_dict.items()), columns=["Metric", "Value"])
+
+    # Create Excel in memory
     excel_buffer = io.BytesIO()
-    df = pd.DataFrame(list(metrics_dict.items()), columns=["Métrica", "Valor"])
-    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Métricas')
+    with pd.ExcelWriter(excel_buffer, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Metrics")
     excel_bytes = excel_buffer.getvalue()
 
-    # Crear ZIP en memoria
+    # Package into a ZIP
     mem_zip = io.BytesIO()
     with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("imagen_analizada.jpg", img_bytes)
-        zf.writestr("metricas.xlsx", excel_bytes)
+        zf.writestr("analyzed_image.jpg", img_bytes)
+        zf.writestr("metrics.xlsx", excel_bytes)
     mem_zip.seek(0)
     zip_b64 = base64.b64encode(mem_zip.read()).decode()
 
-    return html.A("⬇️ Descargar imagen + métricas (.zip)",
-                  href="data:application/zip;base64," + zip_b64,
-                  download=zip_filename, target="_blank",
-                  className="btn btn-outline-info mt-2")
-
+    # Return a download link for the ZIP
+    return html.A(
+        "⬇️ Download image + metrics (.zip)",
+        href=f"data:application/zip;base64,{zip_b64}",
+        download=zip_filename,
+        target="_blank",
+        className="btn btn-outline-info mt-2"
+    )
 
 
 if __name__ == "__main__":
