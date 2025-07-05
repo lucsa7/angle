@@ -7,4 +7,3 @@ numpy
 pandas
 xlsxwriter
 git+https://github.com/google/mediapipe.git@v0.10.0
-
