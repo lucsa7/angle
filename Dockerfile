@@ -7,6 +7,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY . /app
+COPY assets /app/assets
 
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
