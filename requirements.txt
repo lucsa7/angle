@@ -3,7 +3,7 @@ dash-bootstrap-components==1.5.0
 flask>=1.0.4,<2.3.0
 gunicorn
 opencv-python-headless
-mediapipe
+git+https://github.com/google/mediapipe.git
 numpy
 pandas
 xlsxwriter
