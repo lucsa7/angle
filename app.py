@@ -32,13 +32,18 @@ CLR_LINE, CLR_PT = (0, 230, 127), (250, 250, 250)
 IDEAL_RGBA      = (0, 255, 0, 110)
 
 METRIC_EXPLANATIONS = {
-    "Hip flex":         "Ángulo hombro–cadera–rodilla: flexión de cadera.",
-    "Knee flex":        "Ángulo cadera–rodilla–tobillo: flexión de rodilla.",
-    "Shoulder flex":    "Ángulo cadera–hombro–muñeca: flexión de hombro.",
-    "|Trunk-Tibia|":    "Diferencia ángulo tronco–tibia y tibia–tronco.",
-    "Ankle DF":         "Dorsiflexión de tobillo: inclinación del pie.",
-    "Apertura rodillas":"Distancia horizontal entre rodillas.",
-    "Apertura pies":    "Distancia horizontal entre tobillos."
+    "Hip flex":          "Ángulo hombro–cadera–rodilla: flexión de cadera.",
+    "Knee flex":         "Ángulo cadera–rodilla–tobillo: flexión de rodilla.",
+    "Shoulder flex":     "Ángulo cadera–hombro–muñeca: flexión de hombro.",
+    "|Trunk-Tibia|":     "Diferencia (absoluta) entre el ángulo del tronco y la tibia.",
+    "Ankle DF":          "Dorsiflexión de tobillo promedio (talón / dedos).",
+    "Apertura rodillas": "Distancia horizontal entre rodillas.",
+    "Apertura pies":     "Distancia horizontal entre puntas de pie.",
+    "Knee/Foot ratio":   "Relación apertura rodillas / apertura pies; ≈1 = alineado.",
+    "L Knee–Toe Δ (px)": "Desplazamiento lateral de la rodilla izquierda respecto a la punta del pie izquierdo (positivo = afuera, negativo = adentro).",
+    "R Knee–Toe Δ (px)": "Desplazamiento lateral de la rodilla derecha respecto a la punta del pie derecho (positivo = afuera, negativo = adentro).",
+    "Left Foot ER (°)":  "Rotación externa del pie izquierdo (0-30° suele considerarse óptimo).",
+    "Right Foot ER (°)": "Rotación externa del pie derecho.",
 }
 
 # —————————————————————————————
@@ -91,157 +96,158 @@ def card(var, val):
     ])
 
 # —————————————————————————————
-# 3) Análisis Sagital
+# 3) Análisis Sagital (estética homogénea)
 # —————————————————————————————
-
 def analyze_sagital(img):
-    # 1) detectamos pose en toda la imagen
+    # 1) Pose inicial
     res1 = POSE.process(img)
     if not res1.pose_landmarks:
         return None, None, {}
     crop = crop_person(img, res1.pose_landmarks.landmark)
     h, w = crop.shape[:2]
 
-    # 2) re-detectamos sobre el recorte
+    # 2) Pose sobre el recorte
     res2 = POSE.process(crop)
     if not res2.pose_landmarks:
         return crop, crop, {}
     lm2 = res2.pose_landmarks.landmark
 
-    # 3) extraemos los puntos relevantes
-    side = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
-    choose = lambda L, R: R if side=="R" else L
-    ids = [choose(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-           for n in ("SHOULDER","HIP","KNEE","ANKLE","HEEL","FOOT_INDEX","WRIST")]
-    SHp, HIp, KNp, ANp, HEp, FTp, WRp = [
-        (int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids
-    ]
+    # 3) Puntos relevantes
+    side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
+    pick  = lambda L, R: R if side == "R" else L
+    ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
+             for n in ("SHOULDER","HIP","KNEE","ANKLE","HEEL","FOOT_INDEX","WRIST")]
+    SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
 
-    # 4) calculamos ángulos
-    hip_flex      = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
-    knee_flex     = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
-    shoulder_flex = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
-    trunk_tibia   = abs(hip_flex - knee_flex)
-    raw_heel      = angle_between(np.array(KNp)-ANp, np.array(HEp)-ANp) - 90
-    raw_toe       = angle_between(np.array(KNp)-ANp, np.array(FTp)-ANp) - 90
-    ankle_df      = (abs(raw_heel) + abs(raw_toe)) / 2
+    # 4) Ángulos
+    hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
+    knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
+    shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
+    trunk_tib  = abs(hip_flex - knee_flex)
+    raw_heel   = angle_between(np.array(KNp)-ANp, np.array(HEp)-ANp) - 90
+    raw_toe    = angle_between(np.array(KNp)-ANp, np.array(FTp)-ANp) - 90
+    ankle_df   = (abs(raw_heel) + abs(raw_toe)) / 2
 
     data = {
         "Hip flex":      hip_flex,
         "Knee flex":     knee_flex,
-        "Shoulder flex": shoulder_flex,
-        "|Trunk-Tibia|": trunk_tibia,
+        "Shoulder flex": shld_flex,
+        "|Trunk-Tibia|": trunk_tib,
         "Ankle DF":      ankle_df
     }
 
-    # 5) segmentamos y difuminamos fondo
+    # 5) Fondo difuminado
     seg  = SEG.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
     mask = seg.segmentation_mask > 0.6
     blur = cv2.GaussianBlur(crop, (17,17), 0)
     vis  = np.where(mask[...,None], crop, blur).astype(np.uint8)
 
-    # 6) dibujamos ángulos con flechas azules + puntos + texto
+    # 6) Dibujos finos + texto
     for name, (A, B, C) in [
         ("Hip flex",      (SHp, HIp, KNp)),
         ("Knee flex",     (HIp, KNp, ANp)),
         ("Shoulder flex", (HIp, SHp, WRp))
     ]:
-        # flechas azules: vectores que definen el ángulo
-        cv2.arrowedLine(vis, B, A, (255, 0, 0), 2, tipLength=0.1)
-        cv2.arrowedLine(vis, B, C, (255, 0, 0), 2, tipLength=0.1)
-        # puntos en blanco
+        cv2.arrowedLine(vis, B, A, (255,0,0), 3, tipLength=0.1)
+        cv2.arrowedLine(vis, B, C, (255,0,0), 3, tipLength=0.1)
         for pt in (A, B, C):
-            cv2.circle(vis, pt, 7, CLR_PT, -1)
-        # valor numérico
+            cv2.circle(vis, pt, 6, CLR_PT, -1)
         txt = f"{data[name]:.1f}"
-        pos = (B[0] + 12, B[1] - 12)
-        cv2.putText(vis, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (255,255,255), 3, cv2.LINE_AA)
-        cv2.putText(vis, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (  0,  0,  0), 2, cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 3, cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2, cv2.LINE_AA)
 
-    # 7) dibujamos tobillo (puntos + texto)
-    cv2.line(vis, KNp, ANp, CLR_LINE, 6)
-    cv2.line(vis, HEp, FTp, CLR_LINE, 6)
+    # 7) Tobillo
+    cv2.line(vis, KNp, ANp, CLR_LINE, 4)
+    cv2.line(vis, HEp, FTp, CLR_LINE, 4)
     for pt in (KNp, ANp, HEp, FTp):
-        cv2.circle(vis, pt, 7, CLR_PT, -1)
+        cv2.circle(vis, pt, 6, CLR_PT, -1)
     txt = f"{ankle_df:.1f}"
-    pos = (ANp[0] + 12, ANp[1] - 12)
-    cv2.putText(vis, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                (255,255,255), 3, cv2.LINE_AA)
-    cv2.putText(vis, txt, pos, cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                (  0,  0,  0), 2, cv2.LINE_AA)
+    cv2.putText(vis, txt, (ANp[0]+12, ANp[1]-12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 3, cv2.LINE_AA)
+    cv2.putText(vis, txt, (ANp[0]+12, ANp[1]-12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2, cv2.LINE_AA)
 
     return crop, vis, data
 
 
 # —————————————————————————————
-# 4) Análisis Frontal (con rodillas y pies)
+# 4) Análisis Frontal (incluye Foot ER)
 # —————————————————————————————
-
 def analyze_frontal(img):
     res = POSE.process(img)
     if not res.pose_landmarks:
         return None, None, None
 
-    # 1) recorte
+    # 1) Recorte y 2ª detección
     crop = crop_person(img, res.pose_landmarks.landmark)
     h, w = crop.shape[:2]
-    lm2 = POSE.process(crop).pose_landmarks.landmark
+    lm   = POSE.process(crop).pose_landmarks.landmark
 
-    # 2) puntos de interés
-    SHL = (int(lm2[P.LEFT_SHOULDER].x*w),  int(lm2[P.LEFT_SHOULDER].y*h))
-    SHR = (int(lm2[P.RIGHT_SHOULDER].x*w), int(lm2[P.RIGHT_SHOULDER].y*h))
-    LHL = (int(lm2[P.LEFT_HIP].x*w),       int(lm2[P.LEFT_HIP].y*h))
-    RHL = (int(lm2[P.RIGHT_HIP].x*w),      int(lm2[P.RIGHT_HIP].y*h))
-    LWL = (int(lm2[P.LEFT_WRIST].x*w),     int(lm2[P.LEFT_WRIST].y*h))
-    RWL = (int(lm2[P.RIGHT_WRIST].x*w),    int(lm2[P.RIGHT_WRIST].y*h))
-    LKL = (int(lm2[P.LEFT_KNEE].x*w),      int(lm2[P.LEFT_KNEE].y*h))
-    RKL = (int(lm2[P.RIGHT_KNEE].x*w),     int(lm2[P.RIGHT_KNEE].y*h))
-    LAL = (int(lm2[P.LEFT_ANKLE].x*w),     int(lm2[P.LEFT_ANKLE].y*h))
-    RAL = (int(lm2[P.RIGHT_ANKLE].x*w),    int(lm2[P.RIGHT_ANKLE].y*h))
+    # 2) Puntos clave
+    SHL, SHR = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_SHOULDER,  P.RIGHT_SHOULDER)]
+    LHL, RHL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_HIP,      P.RIGHT_HIP)]
+    LWL, RWL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_WRIST,    P.RIGHT_WRIST)]
+    LKL, RKL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_KNEE,     P.RIGHT_KNEE)]
+    LFP, RFP = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_FOOT_INDEX, P.RIGHT_FOOT_INDEX)]
+    LHE, RHE = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_HEEL,       P.RIGHT_HEEL)]
 
     vis = crop.copy()
 
-    # 3) líneas de hombro→cadera→muñeca
-    for a,b in [(SHL,LHL),(SHR,RHL),(SHL,LWL),(SHR,RWL)]:
-        cv2.line(vis, a, b, IDEAL_RGBA[:3], 4)
+    # 3) Dibujos
+    for a, b in [(SHL,LHL),(SHR,RHL),(SHL,LWL),(SHR,RWL)]:
+        cv2.line(vis, a, b, IDEAL_RGBA[:3], 3)
+    for hip, knee, toe in [(LHL,LKL,LFP),(RHL,RKL,RFP)]:
+        cv2.line(vis, hip, knee, CLR_LINE, 4)
+        cv2.line(vis, knee, toe, CLR_LINE, 4)
+    cv2.line(vis, LKL, RKL, (0,165,255), 2)
+    cv2.line(vis, LFP, RFP, (0,165,255), 2)
+    for p in (SHL,SHR,LHL,RHL,LWL,RWL,LKL,RKL,LFP,RFP):
+        cv2.circle(vis, p, 6, CLR_PT, -1)
 
-    # 4) líneas apertura en naranja
-    cv2.line(vis, LKL, RKL, (0,165,255), 3, cv2.LINE_AA)
-    cv2.line(vis, LAL, RAL, (0,165,255), 3, cv2.LINE_AA)
+    # 4) Métricas principales
+    D_rod = abs(RKL[0]-LKL[0])
+    D_pie = abs(RFP[0]-LFP[0])
+    ratio = round(D_rod / (D_pie + 1e-6), 2)
+    L_off = LKL[0] - LFP[0]   # +afuera / –adentro
+    R_off = RKL[0] - RFP[0]
 
-    # 5) líneas cadera→rodilla→tobillo
-    for hip, knee, ankle in [(LHL,LKL,LAL),(RHL,RKL,RAL)]:
-        cv2.line(vis, hip, knee, CLR_LINE, 6)
-        cv2.line(vis, knee, ankle, CLR_LINE, 6)
+    # 5) Rotación externa de cada pie (0–90°)
+    def foot_er(heel, toe):
+        v   = np.array(toe) - np.array(heel)
+        ang = np.degrees(np.arctan2(abs(v[1]), abs(v[0])))  # |dx|
+        return round(ang, 1)
 
-    # 6) puntos
-    for p in (SHL,SHR,LHL,RHL,LWL,RWL,LKL,RKL,LAL,RAL):
-        cv2.circle(vis, p, 8, CLR_PT, -1)
+    L_er = foot_er(LHE, LFP)
+    R_er = foot_er(RHE, RFP)
 
-    # 7) horizontales de referencia
-    for y in (SHL[1], SHR[1], LHL[1], RHL[1], LWL[1], RWL[1]):
-        cv2.line(vis, (0,y), (w,y), CLR_LINE, 3)
-
-    # 8) métricas
-    D_rod = abs(RKL[0] - LKL[0])
-    D_pie = abs(RAL[0] - LAL[0])
+    # 6) Diccionario de resultados
     data = {
-        "Left Shoulder (px)":   SHL[1],
-        "Right Shoulder (px)":  SHR[1],
-        "Δ Shoulder (px)":      abs(SHR[1]-SHL[1]),
-        "Left Hip (px)":        LHL[1],
-        "Right Hip (px)":       RHL[1],
-        "Δ Hip (px)":           abs(RHL[1]-LHL[1]),
-        "Left Wrist (px)":      LWL[1],
-        "Right Wrist (px)":     RWL[1],
-        "Δ Wrist (px)":         abs(RWL[1]-LWL[1]),
-        "Apertura rodillas":    D_rod,
-        "Apertura pies":        D_pie
+        "Left Shoulder (px)": SHL[1],  "Right Shoulder (px)": SHR[1],
+        "Δ Shoulder (px)": abs(SHR[1]-SHL[1]),
+        "Left Hip (px)":   LHL[1],     "Right Hip (px)":      RHL[1],
+        "Δ Hip (px)":      abs(RHL[1]-LHL[1]),
+        "Apertura rodillas": D_rod,
+        "Apertura pies":     D_pie,
+        "Knee/Foot ratio":   ratio,
+        "L Knee–Toe Δ (px)": L_off,
+        "R Knee–Toe Δ (px)": R_off,
+        "Left Foot ER (°)":  L_er,
+        "Right Foot ER (°)": R_er,
     }
 
+    # 7) Círculo + texto en cada pie
+    tol = 12
+    for off, toe in [(L_off, LFP), (R_off, RFP)]:
+        ok    = abs(off) <= tol
+        color = (0,255,0) if ok else (0,0,255)
+        cv2.circle(vis, toe, 14, color, -1 if ok else 3)
+        cv2.putText(vis, f"{off:+d}px", (toe[0]-25, toe[1]+28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+
     return crop, vis, data
+
 
 
 # —————————————————————————————
@@ -355,7 +361,7 @@ app.layout = dbc.Container([
 
 
 # —————————————————————————————
-# Callbacks para análisis
+# Callback para la vista sagital
 # —————————————————————————————
 @app.callback(
     Output("out-sag", "children"),
@@ -367,37 +373,63 @@ def analyze_sag(contents, filename):
         return ""
     if Path(filename).suffix.lower() not in ALLOWED:
         return dbc.Alert("Formato no soportado", color="danger")
+
+    # 1) Decodificar y analizar
     img = b64_to_cv2(contents)
     crop, vis, data = analyze_sagital(img)
     if crop is None:
         return dbc.Alert("No se detectó pose", color="warning")
 
+    # 2) Tarjetas métricas
+    cards = [card(k, v) for k, v in data.items()]
+
+    # 3) Imágenes y gráfica horizontal (estilo frontal)
     crop_b64 = cv2_to_b64(crop)
     vis_b64  = cv2_to_b64(vis)
-    fig = px.bar(x=list(data.keys()), y=list(data.values()),
-                 labels={'x':'Métrica','y':'Valor (°)'},
-                 title="Métricas sagital")
 
+    fig = px.bar(
+        x=list(data.values()),
+        y=list(data.keys()),
+        orientation='h',
+        labels={'x': 'Valor', 'y': ''},
+        template='plotly_white',
+        height=300
+    )
+    fig.update_traces(
+        marker_color='rgb(0,123,167)',
+        width=0.6,
+        hovertemplate='%{y}: %{x}<extra></extra>'
+    )
+    fig.update_layout(margin=dict(t=10, b=10, l=80, r=10), title='')
+
+    # 4) Layout devuelto
     return html.Div([
         dbc.Row([
-            dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                             style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
-                    width=6),
+            dbc.Col(
+                html.Img(src=f"data:image/jpg;base64,{crop_b64}",
+                         style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
+                width=6
+            ),
             dbc.Col([
                 html.H5("Métricas", className="text-white mb-2"),
-                html.Div([card(k, v) for k, v in data.items()],
-                         style={"display":"flex","flexWrap":"wrap"}),
+                html.Div(cards, style={"display":"flex","flexWrap":"wrap"}),
                 dcc.Graph(figure=fig)
             ], width=6)
         ], align="start"),
         html.Hr(className="border-secondary"),
-        dbc.Row(dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                                 style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
-                        width={"size":8,"offset":2})),
+        dbc.Row(
+            dbc.Col(
+                html.Img(src=f"data:image/jpg;base64,{vis_b64}",
+                         style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
+                width={"size":8,"offset":2}
+            )
+        ),
         html.Div(create_zip(vis_b64, data, "sagittal_analysis.zip"), className="mt-3")
     ])
 
-
+# —————————————————————————————
+# Callback para la vista frontal
+# —————————————————————————————
 @app.callback(
     Output("out-front", "children"),
     Input("up-front", "contents"),
@@ -408,97 +440,60 @@ def analyze_front(contents, filename):
         return ""
     if Path(filename).suffix.lower() not in ALLOWED:
         return dbc.Alert("Formato no soportado", color="danger")
+
+    # 1) Decodificar y analizar
     img = b64_to_cv2(contents)
     crop, vis, data = analyze_frontal(img)
     if crop is None:
         return dbc.Alert("No se detectó pose", color="warning")
 
+    # 2) Tarjetas métricas
+    cards = [card(k, v) for k, v in data.items()]
+
+    # 3) Imágenes y gráfico
     crop_b64 = cv2_to_b64(crop)
     vis_b64  = cv2_to_b64(vis)
-    fig = px.bar(x=list(data.keys()), y=list(data.values()),
-                 labels={'x':'Métrica','y':'Pixeles'},
-                 title="Métricas frontal")
 
+    fig = px.bar(
+        x=list(data.values()),
+        y=list(data.keys()),
+        orientation='h',
+        labels={'x': 'Valor', 'y': ''},
+        template='plotly_white',
+        height=300
+    )
+    fig.update_traces(
+        marker_color='rgb(0,123,167)',
+        width=0.6,
+        hovertemplate='%{y}: %{x}<extra></extra>'
+    )
+    fig.update_layout(margin=dict(t=10, b=10, l=80, r=10), title='')
+
+    # 4) Layout devuelto
     return html.Div([
         dbc.Row([
-            dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                             style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
-                    width=6),
+            dbc.Col(
+                html.Img(src=f"data:image/jpg;base64,{crop_b64}",
+                         style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
+                width=6
+            ),
             dbc.Col([
                 html.H5("Métricas", className="text-white mb-2"),
-                html.Div([card(k, v) for k, v in data.items()],
-                         style={"display":"flex","flexWrap":"wrap"}),
+                html.Div(cards, style={"display":"flex","flexWrap":"wrap"}),
                 dcc.Graph(figure=fig)
             ], width=6)
         ], align="start"),
         html.Hr(className="border-secondary"),
-        dbc.Row(dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                                 style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
-                        width={"size":8,"offset":2})),
+        dbc.Row(
+            dbc.Col(
+                html.Img(src=f"data:image/jpg;base64,{vis_b64}",
+                         style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
+                width={"size":8,"offset":2}
+            )
+        ),
         html.Div(create_zip(vis_b64, data, "frontal_analysis.zip"), className="mt-3")
     ])
 
-
-def analyze_frontal(img):
-    res = POSE.process(img)
-    if not res.pose_landmarks:
-        return None, None, None
-
-    # 1) Recorte
-    crop = crop_person(img, res.pose_landmarks.landmark)
-    h, w = crop.shape[:2]
-    lm = POSE.process(crop).pose_landmarks.landmark
-
-    # 2) Coordenadas de puntos
-    SHL = (int(lm[P.LEFT_SHOULDER].x*w),  int(lm[P.LEFT_SHOULDER].y*h))
-    SHR = (int(lm[P.RIGHT_SHOULDER].x*w), int(lm[P.RIGHT_SHOULDER].y*h))
-    LHL = (int(lm[P.LEFT_HIP].x*w),       int(lm[P.LEFT_HIP].y*h))
-    RHL = (int(lm[P.RIGHT_HIP].x*w),      int(lm[P.RIGHT_HIP].y*h))
-    LWL = (int(lm[P.LEFT_WRIST].x*w),     int(lm[P.LEFT_WRIST].y*h))
-    RWL = (int(lm[P.RIGHT_WRIST].x*w),    int(lm[P.RIGHT_WRIST].y*h))
-    LKL = (int(lm[P.LEFT_KNEE].x*w),      int(lm[P.LEFT_KNEE].y*h))
-    RKL = (int(lm[P.RIGHT_KNEE].x*w),     int(lm[P.RIGHT_KNEE].y*h))
-    LAL = (int(lm[P.LEFT_ANKLE].x*w),     int(lm[P.LEFT_ANKLE].y*h))
-    RAL = (int(lm[P.RIGHT_ANKLE].x*w),    int(lm[P.RIGHT_ANKLE].y*h))
-
-    vis = crop.copy()
-
-    # 3) Dibujar líneas hombro→cadera→muñeca
-    for a, b in [(SHL,LHL),(SHR,RHL),(SHL,LWL),(SHR,RWL)]:
-        cv2.line(vis, a, b, IDEAL_RGBA[:3], 4)
-
-    # 4) Dibujar líneas cadera→rodilla→tobillo
-    for hip, knee, ankle in [(LHL,LKL,LAL),(RHL,RKL,RAL)]:
-        cv2.line(vis, hip, knee, CLR_LINE, 6)
-        cv2.line(vis, knee, ankle, CLR_LINE, 6)
-
-    # 5) Dibujar puntos
-    for p in (SHL,SHR,LHL,RHL,LWL,RWL,LKL,RKL,LAL,RAL):
-        cv2.circle(vis, p, 8, CLR_PT, -1)
-
-    # 6) Líneas horizontales de referencia
-    for y in (SHL[1], SHR[1], LHL[1], RHL[1], LWL[1], RWL[1]):
-        cv2.line(vis, (0,y), (w,y), CLR_LINE, 3)
-
-    # 7) Cálculo de métricas
-    D_rod = abs(RKL[0] - LKL[0])
-    D_pie = abs(RAL[0] - LAL[0])
-
-    data = {
-        "Left Shoulder (px)":   SHL[1],
-        "Right Shoulder (px)":  SHR[1],
-        "Δ Shoulder (px)":      abs(SHR[1] - SHL[1]),
-        "Left Hip (px)":        LHL[1],
-        "Right Hip (px)":       RHL[1],
-        "Δ Hip (px)":           abs(RHL[1] - LHL[1]),
-        "Left Wrist (px)":      LWL[1],
-        "Right Wrist (px)":     RWL[1],
-        "Δ Wrist (px)":         abs(RWL[1] - LWL[1]),
-        "Apertura rodillas":    D_rod,
-        "Apertura pies":        D_pie
-    }
-
-    return crop, vis, data
 # —————————————————————————————
 # Función de descarga ZIP
 # —————————————————————————————
