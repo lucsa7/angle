@@ -1,20 +1,17 @@
-import base64
-import cv2
-import mediapipe as mp
-import numpy as np
-import tempfile
+# IMPORTS ÚNICOS
+import base64, cv2, mediapipe as mp, numpy as np, tempfile
 from pathlib import Path
-import dash
-import dash_bootstrap_components as dbc
+import dash, dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State
 from flask import Flask
-import zipfile
-import io
-import pandas as pd
-import os
-import plotly.express as px
-from dash import dcc, html, Input, Output, State
-import dash_bootstrap_components as dbc
+import zipfile, io, pandas as pd, os, plotly.express as px
+
+# report_utils
+from report_utils import build_report, interpret_metrics        # ← solo aquí
+
+# ... resto de código idéntico (functions, layout, callbacks) ...
+
+
 
 
 # —————————————————————————————
@@ -98,25 +95,30 @@ def card(var, val):
 # —————————————————————————————
 # 3) Análisis Sagital (estética homogénea)
 # —————————————————————————————
+# —————————————————————————————
+# 3) Análisis Sagital (estética homogénea)
+# —————————————————————————————
 def analyze_sagital(img):
     # 1) Pose inicial
     res1 = POSE.process(img)
     if not res1.pose_landmarks:
-        return None, None, {}
+        return None, None, {}                          # ← corte temprano
+
     crop = crop_person(img, res1.pose_landmarks.landmark)
     h, w = crop.shape[:2]
 
     # 2) Pose sobre el recorte
     res2 = POSE.process(crop)
     if not res2.pose_landmarks:
-        return crop, crop, {}
+        return None, None, {}                          # ← corte temprano
+
     lm2 = res2.pose_landmarks.landmark
 
     # 3) Puntos relevantes
     side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
     pick  = lambda L, R: R if side == "R" else L
     ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-             for n in ("SHOULDER","HIP","KNEE","ANKLE","HEEL","FOOT_INDEX","WRIST")]
+             for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
     SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
 
     # 4) Ángulos
@@ -139,8 +141,8 @@ def analyze_sagital(img):
     # 5) Fondo difuminado
     seg  = SEG.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
     mask = seg.segmentation_mask > 0.6
-    blur = cv2.GaussianBlur(crop, (17,17), 0)
-    vis  = np.where(mask[...,None], crop, blur).astype(np.uint8)
+    blur = cv2.GaussianBlur(crop, (17, 17), 0)
+    vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
 
     # 6) Dibujos finos + texto
     for name, (A, B, C) in [
@@ -148,15 +150,15 @@ def analyze_sagital(img):
         ("Knee flex",     (HIp, KNp, ANp)),
         ("Shoulder flex", (HIp, SHp, WRp))
     ]:
-        cv2.arrowedLine(vis, B, A, (255,0,0), 3, tipLength=0.1)
-        cv2.arrowedLine(vis, B, C, (255,0,0), 3, tipLength=0.1)
+        cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
+        cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
         for pt in (A, B, C):
             cv2.circle(vis, pt, 6, CLR_PT, -1)
         txt = f"{data[name]:.1f}"
-        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 3, cv2.LINE_AA)
-        cv2.putText(vis, txt, (B[0]+12, B[1]-12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2, cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
+        cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
     # 7) Tobillo
     cv2.line(vis, KNp, ANp, CLR_LINE, 4)
@@ -164,10 +166,10 @@ def analyze_sagital(img):
     for pt in (KNp, ANp, HEp, FTp):
         cv2.circle(vis, pt, 6, CLR_PT, -1)
     txt = f"{ankle_df:.1f}"
-    cv2.putText(vis, txt, (ANp[0]+12, ANp[1]-12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 3, cv2.LINE_AA)
-    cv2.putText(vis, txt, (ANp[0]+12, ANp[1]-12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2, cv2.LINE_AA)
+    cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
     return crop, vis, data
 
@@ -360,9 +362,14 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 
-# —————————————————————————————
-# Callback para la vista sagital
-# —————————————————————————————
+# ——————————————————————————————————————————
+# 1) ancho máximo UNIFICADO para la UI
+# ——————————————————————————————————————————
+MAX_W_UI_SAG = "250px"   # ajusta aquí si quieres más / menos
+
+# ——————————————————————————————————————————
+# 2) Callback analyze_sag (solo cambian maxWidth)
+# ——————————————————————————————————————————
 @app.callback(
     Output("out-sag", "children"),
     Input("up-sag", "contents"),
@@ -374,62 +381,62 @@ def analyze_sag(contents, filename):
     if Path(filename).suffix.lower() not in ALLOWED:
         return dbc.Alert("Formato no soportado", color="danger")
 
-    # 1) Decodificar y analizar
     img = b64_to_cv2(contents)
     crop, vis, data = analyze_sagital(img)
     if crop is None:
         return dbc.Alert("No se detectó pose", color="warning")
 
-    # 2) Tarjetas métricas
     cards = [card(k, v) for k, v in data.items()]
-
-    # 3) Imágenes y gráfica horizontal (estilo frontal)
     crop_b64 = cv2_to_b64(crop)
     vis_b64  = cv2_to_b64(vis)
 
     fig = px.bar(
-        x=list(data.values()),
-        y=list(data.keys()),
-        orientation='h',
-        labels={'x': 'Valor', 'y': ''},
-        template='plotly_white',
-        height=300
+        x=list(data.values()), y=list(data.keys()),
+        orientation='h', template='plotly_white', height=300,
+        labels={'x': 'Valor', 'y': ''}
     )
-    fig.update_traces(
-        marker_color='rgb(0,123,167)',
-        width=0.6,
-        hovertemplate='%{y}: %{x}<extra></extra>'
-    )
-    fig.update_layout(margin=dict(t=10, b=10, l=80, r=10), title='')
+    fig.update_traces(marker_color='rgb(0,123,167)', width=0.6)
 
-    # 4) Layout devuelto
+    zip_link = create_zip(vis_b64, data, "sagittal_analysis.zip")
+    report_buf = build_report(base64.b64decode(vis_b64), data,
+                              atleta="Atleta", vista="Sagital")
+    report_b64 = base64.b64encode(report_buf.getvalue()).decode()
+    report_link = html.A(
+        "📄 Descargar informe (.docx)",
+        href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
+        download=f"informe_{Path(filename).stem}_sagital.docx",
+        className="btn btn-success mt-2"
+    )
+
     return html.Div([
         dbc.Row([
-            dbc.Col(
-                html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                         style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
-                width=6
-            ),
+            # —— crop —— 
+            dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
+                             style={"width": "100%",
+                                    "maxWidth": MAX_W_UI_SAG,
+                                    "borderRadius": "6px"}),
+                    width=6),
+            # —— tarjetas + barra —— 
             dbc.Col([
                 html.H5("Métricas", className="text-white mb-2"),
-                html.Div(cards, style={"display":"flex","flexWrap":"wrap"}),
+                html.Div(cards, style={"display": "flex", "flexWrap": "wrap"}),
                 dcc.Graph(figure=fig)
             ], width=6)
         ], align="start"),
         html.Hr(className="border-secondary"),
+        # —— vis —— 
         dbc.Row(
-            dbc.Col(
-                html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                         style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
-                width={"size":8,"offset":2}
-            )
+            dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
+                             style={"width": "100%",
+                                    "maxWidth": MAX_W_UI_SAG,
+                                    "borderRadius": "6px"}),
+                    width={"size": 8, "offset": 2})
         ),
-        html.Div(create_zip(vis_b64, data, "sagittal_analysis.zip"), className="mt-3")
+        html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
     ])
-
-# —————————————————————————————
-# Callback para la vista frontal
-# —————————————————————————————
+# ————————————————————————————————————————————————
+# Callback para la vista frontal  (COMPLETO)
+# ————————————————————————————————————————————————
 @app.callback(
     Output("out-front", "children"),
     Input("up-front", "contents"),
@@ -450,7 +457,7 @@ def analyze_front(contents, filename):
     # 2) Tarjetas métricas
     cards = [card(k, v) for k, v in data.items()]
 
-    # 3) Imágenes y gráfico
+    # 3) Imágenes y gráfica
     crop_b64 = cv2_to_b64(crop)
     vis_b64  = cv2_to_b64(vis)
 
@@ -462,24 +469,36 @@ def analyze_front(contents, filename):
         template='plotly_white',
         height=300
     )
-    fig.update_traces(
-        marker_color='rgb(0,123,167)',
-        width=0.6,
-        hovertemplate='%{y}: %{x}<extra></extra>'
-    )
+    fig.update_traces(marker_color='rgb(0,123,167)', width=0.6,
+                      hovertemplate='%{y}: %{x}<extra></extra>')
     fig.update_layout(margin=dict(t=10, b=10, l=80, r=10), title='')
 
-    # 4) Layout devuelto
+    # 4) ZIP (imagen + Excel)
+    zip_link = create_zip(vis_b64, data, "frontal_analysis.zip")
+
+    # 5) Informe Word (docx)
+    report_buf = build_report(base64.b64decode(vis_b64), data,
+                              atleta="Atleta", vista="Frontal")
+    report_b64 = base64.b64encode(report_buf.getvalue()).decode()
+    report_link = html.A(
+        "📄 Descargar informe (.docx)",
+        href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
+        download=f"informe_{Path(filename).stem}_frontal.docx",
+        className="btn btn-success mt-2"
+    )
+
+    # 6) Layout devuelto
     return html.Div([
         dbc.Row([
             dbc.Col(
                 html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                         style={"width":"100%","maxWidth":"400px","borderRadius":"6px"}),
+                         style={"width": "100%", "maxWidth": "400px",
+                                "borderRadius": "6px"}),
                 width=6
             ),
             dbc.Col([
                 html.H5("Métricas", className="text-white mb-2"),
-                html.Div(cards, style={"display":"flex","flexWrap":"wrap"}),
+                html.Div(cards, style={"display": "flex", "flexWrap": "wrap"}),
                 dcc.Graph(figure=fig)
             ], width=6)
         ], align="start"),
@@ -487,12 +506,14 @@ def analyze_front(contents, filename):
         dbc.Row(
             dbc.Col(
                 html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                         style={"width":"100%","maxWidth":"800px","borderRadius":"6px"}),
-                width={"size":8,"offset":2}
+                         style={"width": "100%", "maxWidth": "800px",
+                                "borderRadius": "6px"}),
+                width={"size": 8, "offset": 2}
             )
         ),
-        html.Div(create_zip(vis_b64, data, "frontal_analysis.zip"), className="mt-3")
+        html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
     ])
+
 
 # —————————————————————————————
 # Función de descarga ZIP
@@ -528,9 +549,7 @@ def create_zip(img_b64: str, metrics_dict: dict, zip_filename: str) -> html.A:
         className="btn btn-outline-info mt-2"
     )
 
-# —————————————————————————————
-# Ejecución
-# —————————————————————————————
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run_server(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=True)   # ← debug=True
+
