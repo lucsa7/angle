@@ -9,11 +9,6 @@ import zipfile, io, pandas as pd, os, plotly.express as px
 # report_utils
 from report_utils import build_report, interpret_metrics        # ← solo aquí
 
-# ... resto de código idéntico (functions, layout, callbacks) ...
-
-
-
-
 # —————————————————————————————
 # 1) Configuración inicial
 # —————————————————————————————
@@ -21,9 +16,14 @@ TMP_DIR = Path(tempfile.gettempdir()) / "ohs_tmp"
 TMP_DIR.mkdir(exist_ok=True)
 ALLOWED = {".jpg", ".jpeg", ".png"}
 
-POSE = mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1)
-SEG  = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1)
-P    = mp.solutions.pose.PoseLandmark
+# ✅ Instancias seguras por función (evita conflictos entre usuarios)
+def get_pose(static=True):
+    return mp.solutions.pose.Pose(static_image_mode=static, model_complexity=1)
+
+def get_seg():
+    return mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1)
+
+P = mp.solutions.pose.PoseLandmark
 
 CLR_LINE, CLR_PT = (0, 230, 127), (250, 250, 250)
 IDEAL_RGBA      = (0, 255, 0, 110)
@@ -92,25 +92,23 @@ def card(var, val):
         dbc.Tooltip(METRIC_EXPLANATIONS.get(var, ""), target=cid)
     ])
 
-# —————————————————————————————
-# 3) Análisis Sagital (estética homogénea)
-# —————————————————————————————
-# —————————————————————————————
-# 3) Análisis Sagital (estética homogénea)
-# —————————————————————————————
 def analyze_sagital(img):
+    # ✅ Crear instancia segura para este análisis
+    pose = get_pose(static=True)
+    seg  = get_seg()
+
     # 1) Pose inicial
-    res1 = POSE.process(img)
+    res1 = pose.process(img)
     if not res1.pose_landmarks:
-        return None, None, {}                          # ← corte temprano
+        return None, None, {}
 
     crop = crop_person(img, res1.pose_landmarks.landmark)
     h, w = crop.shape[:2]
 
     # 2) Pose sobre el recorte
-    res2 = POSE.process(crop)
+    res2 = pose.process(crop)
     if not res2.pose_landmarks:
-        return None, None, {}                          # ← corte temprano
+        return None, None, {}
 
     lm2 = res2.pose_landmarks.landmark
 
@@ -139,8 +137,8 @@ def analyze_sagital(img):
     }
 
     # 5) Fondo difuminado
-    seg  = SEG.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
-    mask = seg.segmentation_mask > 0.6
+    seg_result = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+    mask = seg_result.segmentation_mask > 0.6
     blur = cv2.GaussianBlur(crop, (17, 17), 0)
     vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
 
@@ -174,18 +172,22 @@ def analyze_sagital(img):
     return crop, vis, data
 
 
-# —————————————————————————————
-# 4) Análisis Frontal (incluye Foot ER)
-# —————————————————————————————
 def analyze_frontal(img):
-    res = POSE.process(img)
+    # ✅ Instancia segura por análisis
+    pose = get_pose(static=True)
+
+    res = pose.process(img)
     if not res.pose_landmarks:
         return None, None, None
 
     # 1) Recorte y 2ª detección
     crop = crop_person(img, res.pose_landmarks.landmark)
     h, w = crop.shape[:2]
-    lm   = POSE.process(crop).pose_landmarks.landmark
+    res_crop = pose.process(crop)
+    if not res_crop.pose_landmarks:
+        return None, None, None
+
+    lm = res_crop.pose_landmarks.landmark
 
     # 2) Puntos clave
     SHL, SHR = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_SHOULDER,  P.RIGHT_SHOULDER)]
@@ -249,8 +251,6 @@ def analyze_frontal(img):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 
     return crop, vis, data
-
-
 
 # —————————————————————————————
 # 5) Configuración Dash y Layout
@@ -551,5 +551,6 @@ def create_zip(img_b64: str, metrics_dict: dict, zip_filename: str) -> html.A:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run(host="0.0.0.0", port=port, debug=True)   # ← debug=True
+    app.run(host="0.0.0.0", port=port, debug=False)
+
 
