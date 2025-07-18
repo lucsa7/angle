@@ -1,0 +1,6 @@
+# Ignorar entornos virtuales
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
