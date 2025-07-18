@@ -329,28 +329,22 @@ app.layout = dbc.Container([
         # Columna Sagital
         dbc.Col([
             html.H5("Sagittal View", className="text-secondary text-center mb-2"),
-dcc.Upload(
-    id="up-sag",
-    children=dbc.Button("📸 Sacar foto (cámara frontal)", color="primary", className="w-100"),
-    accept="image/*",
-    capture="user",  # ← activa cámara frontal en móviles
-    multiple=False
-),
-
+            dcc.Upload(
+                id="up-sag",
+                children=dbc.Button("Upload Sagittal Image", color="primary", className="w-100"),
+                multiple=False
+            ),
             dbc.Spinner(html.Div(id="out-sag")),
         ], md=6, style={'minHeight': '600px'}),
 
         # Columna Frontal
         dbc.Col([
             html.H5("Frontal View", className="text-secondary text-center mb-2"),
-dcc.Upload(
-    id="up-front",
-    children=dbc.Button("📸 Sacar foto (cámara frontal)", color="primary", className="w-100"),
-    accept="image/*",
-    capture="user",  # ← activa cámara frontal en móviles
-    multiple=False
-),
-
+            dcc.Upload(
+                id="up-front",
+                children=dbc.Button("Upload Frontal Image", color="primary", className="w-100"),
+                multiple=False
+            ),
             dbc.Spinner(html.Div(id="out-front")),
         ], md=6, style={'minHeight': '600px'}),
     ], justify="center", className="g-4 mb-4"),
@@ -556,9 +550,7 @@ def create_zip(img_b64: str, metrics_dict: dict, zip_filename: str) -> html.A:
     )
 
 if __name__ == "__main__":
-    print("🔧 Iniciando OHS Analyzer...")  # ← Agregá esta línea
     port = int(os.environ.get("PORT", 8050))
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
 
