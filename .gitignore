@@ -1,6 +1,23 @@
-# Ignorar entornos virtuales
+# Ignorar entorno virtual
+env/
 .venv/
-venv/
+
+# Archivos temporales
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Archivos grandes que pueden romper GitHub
+*.dll
+*.so
+*.dylib
+*.exe
+
+# Archivos innecesarios
+*.log
+*.tmp
+*.bak
+
+# Archivos de usuario
 .DS_Store
