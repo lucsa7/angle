@@ -5,6 +5,7 @@ import dash, dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State
 from flask import Flask
 import zipfile, io, pandas as pd, os, plotly.express as px
+from dash import no_update
 
 # report_utils
 from report_utils import build_report, interpret_metrics        # ← solo aquí
@@ -47,21 +48,36 @@ METRIC_EXPLANATIONS = {
 # 2) Funciones auxiliares
 # —————————————————————————————
 
-def b64_to_cv2(content):
+def b64_to_cv2(content, max_size=720):
     _, b64 = content.split(",", 1)
     img = cv2.imdecode(
         np.frombuffer(base64.b64decode(b64), np.uint8),
         cv2.IMREAD_COLOR
     )
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    h, w = img.shape[:2]
+    if max(h, w) > max_size:
+        scale = max_size / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    
+    return img
 
-def cv2_to_b64(img):
+
+def cv2_to_b64(img, max_w=480):
+    h, w = img.shape[:2]
+    if w > max_w:
+        scale = max_w / w
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    
     _, buf = cv2.imencode(
         ".jpg",
         cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
-        [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+        [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # antes 85 o 75 → ahora 70 (más liviano)
     )
     return base64.b64encode(buf).decode()
+
 
 def angle_between(u, v):
     cos = np.dot(u, v) / (np.linalg.norm(u)*np.linalg.norm(v) + 1e-9)
@@ -93,164 +109,164 @@ def card(var, val):
     ])
 
 def analyze_sagital(img):
-    # ✅ Crear instancia segura para este análisis
     pose = get_pose(static=True)
     seg  = get_seg()
 
-    # 1) Pose inicial
-    res1 = pose.process(img)
-    if not res1.pose_landmarks:
-        return None, None, {}
+    try:
+        # 1) Pose inicial
+        res1 = pose.process(img)
+        if not res1.pose_landmarks:
+            return None, None, {}
 
-    crop = crop_person(img, res1.pose_landmarks.landmark)
-    h, w = crop.shape[:2]
+        crop = crop_person(img, res1.pose_landmarks.landmark)
+        h, w = crop.shape[:2]
 
-    # 2) Pose sobre el recorte
-    res2 = pose.process(crop)
-    if not res2.pose_landmarks:
-        return None, None, {}
+        # 2) Pose sobre el recorte
+        res2 = pose.process(crop)
+        if not res2.pose_landmarks:
+            return None, None, {}
 
-    lm2 = res2.pose_landmarks.landmark
+        lm2 = res2.pose_landmarks.landmark
 
-    # 3) Puntos relevantes
-    side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
-    pick  = lambda L, R: R if side == "R" else L
-    ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-             for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
-    SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
+        # 3) Puntos relevantes
+        side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
+        pick  = lambda L, R: R if side == "R" else L
+        ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
+                 for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
+        SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
 
-    # 4) Ángulos
-    hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
-    knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
-    shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
-    trunk_tib  = abs(hip_flex - knee_flex)
-    raw_heel   = angle_between(np.array(KNp)-ANp, np.array(HEp)-ANp) - 90
-    raw_toe    = angle_between(np.array(KNp)-ANp, np.array(FTp)-ANp) - 90
-    ankle_df   = (abs(raw_heel) + abs(raw_toe)) / 2
+        # 4) Ángulos
+        hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
+        knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
+        shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
+        trunk_tib  = abs(hip_flex - knee_flex)
+        raw_heel   = angle_between(np.array(KNp)-ANp, np.array(HEp)-ANp) - 90
+        raw_toe    = angle_between(np.array(KNp)-ANp, np.array(FTp)-ANp) - 90
+        ankle_df   = (abs(raw_heel) + abs(raw_toe)) / 2
 
-    data = {
-        "Hip flex":      hip_flex,
-        "Knee flex":     knee_flex,
-        "Shoulder flex": shld_flex,
-        "|Trunk-Tibia|": trunk_tib,
-        "Ankle DF":      ankle_df
-    }
+        data = {
+            "Hip flex":      hip_flex,
+            "Knee flex":     knee_flex,
+            "Shoulder flex": shld_flex,
+            "|Trunk-Tibia|": trunk_tib,
+            "Ankle DF":      ankle_df
+        }
 
-    # 5) Fondo difuminado
-    seg_result = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
-    mask = seg_result.segmentation_mask > 0.6
-    blur = cv2.GaussianBlur(crop, (17, 17), 0)
-    vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
+        # 5) Fondo difuminado
+        seg_result = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+        mask = seg_result.segmentation_mask > 0.6
+        blur = cv2.GaussianBlur(crop, (17, 17), 0)
+        vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
 
-    # 6) Dibujos finos + texto
-    for name, (A, B, C) in [
-        ("Hip flex",      (SHp, HIp, KNp)),
-        ("Knee flex",     (HIp, KNp, ANp)),
-        ("Shoulder flex", (HIp, SHp, WRp))
-    ]:
-        cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
-        cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
-        for pt in (A, B, C):
+        # 6) Dibujos finos + texto
+        for name, (A, B, C) in [
+            ("Hip flex",      (SHp, HIp, KNp)),
+            ("Knee flex",     (HIp, KNp, ANp)),
+            ("Shoulder flex", (HIp, SHp, WRp))
+        ]:
+            cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
+            cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
+            for pt in (A, B, C):
+                cv2.circle(vis, pt, 6, CLR_PT, -1)
+            txt = f"{data[name]:.1f}"
+            cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
+            cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
+
+        # 7) Tobillo
+        cv2.line(vis, KNp, ANp, CLR_LINE, 4)
+        cv2.line(vis, HEp, FTp, CLR_LINE, 4)
+        for pt in (KNp, ANp, HEp, FTp):
             cv2.circle(vis, pt, 6, CLR_PT, -1)
-        txt = f"{data[name]:.1f}"
-        cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+        txt = f"{ankle_df:.1f}"
+        cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
-        cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
+        cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
-    # 7) Tobillo
-    cv2.line(vis, KNp, ANp, CLR_LINE, 4)
-    cv2.line(vis, HEp, FTp, CLR_LINE, 4)
-    for pt in (KNp, ANp, HEp, FTp):
-        cv2.circle(vis, pt, 6, CLR_PT, -1)
-    txt = f"{ankle_df:.1f}"
-    cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
-    cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
+        return crop, vis, data
 
-    return crop, vis, data
+    finally:
+        pose.close()
+        seg.close()
 
 
 def analyze_frontal(img):
-    # ✅ Instancia segura por análisis
     pose = get_pose(static=True)
+    try:
+        res = pose.process(img)
+        if not res.pose_landmarks:
+            return None, None, {}
 
-    res = pose.process(img)
-    if not res.pose_landmarks:
-        return None, None, None
+        h, w = img.shape[:2]
+        lm = res.pose_landmarks.landmark
 
-    # 1) Recorte y 2ª detección
-    crop = crop_person(img, res.pose_landmarks.landmark)
-    h, w = crop.shape[:2]
-    res_crop = pose.process(crop)
-    if not res_crop.pose_landmarks:
-        return None, None, None
+        # --- Coordenadas clave ---
+        pts = {
+            "LKnee": lm[P.LEFT_KNEE],
+            "RKnee": lm[P.RIGHT_KNEE],
+            "LAnkle": lm[P.LEFT_ANKLE],
+            "RAnkle": lm[P.RIGHT_ANKLE],
+            "LHeel": lm[P.LEFT_HEEL],
+            "RHeel": lm[P.RIGHT_HEEL],
+            "LFoot": lm[P.LEFT_FOOT_INDEX],
+            "RFoot": lm[P.RIGHT_FOOT_INDEX],
+            "LHip": lm[P.LEFT_HIP],
+            "RHip": lm[P.RIGHT_HIP],
+            "LShoulder": lm[P.LEFT_SHOULDER],
+            "RShoulder": lm[P.RIGHT_SHOULDER],
+            "LWrist": lm[P.LEFT_WRIST],
+            "RWrist": lm[P.RIGHT_WRIST]
+        }
 
-    lm = res_crop.pose_landmarks.landmark
+        # --- Puntos en píxeles ---
+        px = {k: (int(v.x * w), int(v.y * h)) for k, v in pts.items()}
 
-    # 2) Puntos clave
-    SHL, SHR = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_SHOULDER,  P.RIGHT_SHOULDER)]
-    LHL, RHL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_HIP,      P.RIGHT_HIP)]
-    LWL, RWL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_WRIST,    P.RIGHT_WRIST)]
-    LKL, RKL = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_KNEE,     P.RIGHT_KNEE)]
-    LFP, RFP = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_FOOT_INDEX, P.RIGHT_FOOT_INDEX)]
-    LHE, RHE = [(int(lm[p].x*w), int(lm[p].y*h)) for p in (P.LEFT_HEEL,       P.RIGHT_HEEL)]
+        # --- Cálculo de métricas ---
+        hip_delta = abs(pts["LHip"].y - pts["RHip"].y) * h
+        sh_delta = abs(pts["LShoulder"].y - pts["RShoulder"].y) * h
+        wr_delta = abs(pts["LWrist"].y - pts["RWrist"].y) * h
 
-    vis = crop.copy()
+        sep_feet = abs(px["LFoot"][0] - px["RFoot"][0])
+        sep_wrists = abs(px["LWrist"][0] - px["RWrist"][0])
 
-    # 3) Dibujos
-    for a, b in [(SHL,LHL),(SHR,RHL),(SHL,LWL),(SHR,RWL)]:
-        cv2.line(vis, a, b, IDEAL_RGBA[:3], 3)
-    for hip, knee, toe in [(LHL,LKL,LFP),(RHL,RKL,RFP)]:
-        cv2.line(vis, hip, knee, CLR_LINE, 4)
-        cv2.line(vis, knee, toe, CLR_LINE, 4)
-    cv2.line(vis, LKL, RKL, (0,165,255), 2)
-    cv2.line(vis, LFP, RFP, (0,165,255), 2)
-    for p in (SHL,SHR,LHL,RHL,LWL,RWL,LKL,RKL,LFP,RFP):
-        cv2.circle(vis, p, 6, CLR_PT, -1)
+        # Ángulos de rodilla
+        kneeL = angle_between(np.array(px["LAnkle"]) - np.array(px["LKnee"]),
+                              np.array(px["LKnee"]) - np.array(px["LHip"]))
+        kneeR = angle_between(np.array(px["RAnkle"]) - np.array(px["RKnee"]),
+                              np.array(px["RKnee"]) - np.array(px["RHip"]))
 
-    # 4) Métricas principales
-    D_rod = abs(RKL[0]-LKL[0])
-    D_pie = abs(RFP[0]-LFP[0])
-    ratio = round(D_rod / (D_pie + 1e-6), 2)
-    L_off = LKL[0] - LFP[0]   # +afuera / –adentro
-    R_off = RKL[0] - RFP[0]
+        # --- Diccionario de métricas ---
+        data = {
+            "Left knee": kneeL,
+            "Right knee": kneeR,
+            "Hip level Δ": round(hip_delta, 1),
+            "Shoulder level Δ": round(sh_delta, 1),
+            "Wrist level Δ": round(wr_delta, 1),
+            "Feet spread": sep_feet,
+            "Wrist spread": sep_wrists
+        }
 
-    # 5) Rotación externa de cada pie (0–90°)
-    def foot_er(heel, toe):
-        v   = np.array(toe) - np.array(heel)
-        ang = np.degrees(np.arctan2(abs(v[1]), abs(v[0])))  # |dx|
-        return round(ang, 1)
+        # --- Visualización ---
+        vis = img.copy()
+        # puntos
+        for pt in px.values():
+            cv2.circle(vis, pt, 6, CLR_PT, -1)
+        # líneas (ahora más finas y profesionales)
+        lines = [
+            ("LKnee", "LAnkle"), ("RKnee", "RAnkle"),
+            ("LHeel", "LFoot"), ("RHeel", "RFoot"),
+            ("LShoulder", "LWrist"), ("RShoulder", "RWrist")
+        ]
+        for A, B in lines:
+            cv2.line(vis, px[A], px[B], CLR_LINE, 2)  # ancho 2 = más fino
 
-    L_er = foot_er(LHE, LFP)
-    R_er = foot_er(RHE, RFP)
+        return img, vis, data
 
-    # 6) Diccionario de resultados
-    data = {
-        "Left Shoulder (px)": SHL[1],  "Right Shoulder (px)": SHR[1],
-        "Δ Shoulder (px)": abs(SHR[1]-SHL[1]),
-        "Left Hip (px)":   LHL[1],     "Right Hip (px)":      RHL[1],
-        "Δ Hip (px)":      abs(RHL[1]-LHL[1]),
-        "Apertura rodillas": D_rod,
-        "Apertura pies":     D_pie,
-        "Knee/Foot ratio":   ratio,
-        "L Knee–Toe Δ (px)": L_off,
-        "R Knee–Toe Δ (px)": R_off,
-        "Left Foot ER (°)":  L_er,
-        "Right Foot ER (°)": R_er,
-    }
+    finally:
+        pose.close()
 
-    # 7) Círculo + texto en cada pie
-    tol = 12
-    for off, toe in [(L_off, LFP), (R_off, RFP)]:
-        ok    = abs(off) <= tol
-        color = (0,255,0) if ok else (0,0,255)
-        cv2.circle(vis, toe, 14, color, -1 if ok else 3)
-        cv2.putText(vis, f"{off:+d}px", (toe[0]-25, toe[1]+28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
-
-    return crop, vis, data
 
 # —————————————————————————————
 # 5) Configuración Dash y Layout
@@ -316,6 +332,9 @@ app.layout = dbc.Container([
             ])
         ])
     ], color="info", inverse=True, className="mb-4"),
+    html.Div([
+    dbc.Button("🔄 Nuevo análisis", id="btn-reset", color="danger", className="mb-4")
+], className="text-center"),
 
 
     # — Título y descripción —  
@@ -367,152 +386,113 @@ app.layout = dbc.Container([
 # ——————————————————————————————————————————
 MAX_W_UI_SAG = "250px"   # ajusta aquí si quieres más / menos
 
-# ——————————————————————————————————————————
-# 2) Callback analyze_sag (solo cambian maxWidth)
-# ——————————————————————————————————————————
+from dash.exceptions import PreventUpdate
+from dash import ctx
+
 @app.callback(
     Output("out-sag", "children"),
-    Input("up-sag", "contents"),
-    State("up-sag", "filename")
-)
-def analyze_sag(contents, filename):
-    if not contents:
-        return ""
-    if Path(filename).suffix.lower() not in ALLOWED:
-        return dbc.Alert("Formato no soportado", color="danger")
-
-    img = b64_to_cv2(contents)
-    crop, vis, data = analyze_sagital(img)
-    if crop is None:
-        return dbc.Alert("No se detectó pose", color="warning")
-
-    cards = [card(k, v) for k, v in data.items()]
-    crop_b64 = cv2_to_b64(crop)
-    vis_b64  = cv2_to_b64(vis)
-
-    fig = px.bar(
-        x=list(data.values()), y=list(data.keys()),
-        orientation='h', template='plotly_white', height=300,
-        labels={'x': 'Valor', 'y': ''}
-    )
-    fig.update_traces(marker_color='rgb(0,123,167)', width=0.6)
-
-    zip_link = create_zip(vis_b64, data, "sagittal_analysis.zip")
-    report_buf = build_report(base64.b64decode(vis_b64), data,
-                              atleta="Atleta", vista="Sagital")
-    report_b64 = base64.b64encode(report_buf.getvalue()).decode()
-    report_link = html.A(
-        "📄 Descargar informe (.docx)",
-        href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
-        download=f"informe_{Path(filename).stem}_sagital.docx",
-        className="btn btn-success mt-2"
-    )
-
-    return html.Div([
-        dbc.Row([
-            # —— crop —— 
-            dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                             style={"width": "100%",
-                                    "maxWidth": MAX_W_UI_SAG,
-                                    "borderRadius": "6px"}),
-                    width=6),
-            # —— tarjetas + barra —— 
-            dbc.Col([
-                html.H5("Métricas", className="text-white mb-2"),
-                html.Div(cards, style={"display": "flex", "flexWrap": "wrap"}),
-                dcc.Graph(figure=fig)
-            ], width=6)
-        ], align="start"),
-        html.Hr(className="border-secondary"),
-        # —— vis —— 
-        dbc.Row(
-            dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                             style={"width": "100%",
-                                    "maxWidth": MAX_W_UI_SAG,
-                                    "borderRadius": "6px"}),
-                    width={"size": 8, "offset": 2})
-        ),
-        html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
-    ])
-# ————————————————————————————————————————————————
-# Callback para la vista frontal  (COMPLETO)
-# ————————————————————————————————————————————————
-@app.callback(
     Output("out-front", "children"),
+    Input("up-sag", "contents"),
     Input("up-front", "contents"),
-    State("up-front", "filename")
+    Input("btn-reset", "n_clicks"),
+    State("up-sag", "filename"),
+    State("up-front", "filename"),
+    prevent_initial_call=True
 )
-def analyze_front(contents, filename):
-    if not contents:
-        return ""
-    if Path(filename).suffix.lower() not in ALLOWED:
-        return dbc.Alert("Formato no soportado", color="danger")
+def handle_all(sag_content, front_content, reset_clicks, sag_name, front_name):
+    triggered_id = ctx.triggered_id
 
-    # 1) Decodificar y analizar
-    img = b64_to_cv2(contents)
-    crop, vis, data = analyze_frontal(img)
-    if crop is None:
-        return dbc.Alert("No se detectó pose", color="warning")
+    if triggered_id == "btn-reset":
+        return "", ""
 
-    # 2) Tarjetas métricas
-    cards = [card(k, v) for k, v in data.items()]
+    if triggered_id == "up-sag" and sag_content:
+        try:
+            img = b64_to_cv2(sag_content)
+            crop, vis, data = analyze_sagital(img)
+            if crop is None:
+                return dbc.Alert("⚠️ No se detectó pose en imagen sagital.", color="warning"), no_update
 
-    # 3) Imágenes y gráfica
-    crop_b64 = cv2_to_b64(crop)
-    vis_b64  = cv2_to_b64(vis)
+            cards = [card(k, v) for k, v in data.items()]
+            crop_b64 = cv2_to_b64(crop)
+            vis_b64 = cv2_to_b64(vis)
 
-    fig = px.bar(
-        x=list(data.values()),
-        y=list(data.keys()),
-        orientation='h',
-        labels={'x': 'Valor', 'y': ''},
-        template='plotly_white',
-        height=300
-    )
-    fig.update_traces(marker_color='rgb(0,123,167)', width=0.6,
-                      hovertemplate='%{y}: %{x}<extra></extra>')
-    fig.update_layout(margin=dict(t=10, b=10, l=80, r=10), title='')
-
-    # 4) ZIP (imagen + Excel)
-    zip_link = create_zip(vis_b64, data, "frontal_analysis.zip")
-
-    # 5) Informe Word (docx)
-    report_buf = build_report(base64.b64decode(vis_b64), data,
-                              atleta="Atleta", vista="Frontal")
-    report_b64 = base64.b64encode(report_buf.getvalue()).decode()
-    report_link = html.A(
-        "📄 Descargar informe (.docx)",
-        href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
-        download=f"informe_{Path(filename).stem}_frontal.docx",
-        className="btn btn-success mt-2"
-    )
-
-    # 6) Layout devuelto
-    return html.Div([
-        dbc.Row([
-            dbc.Col(
-                html.Img(src=f"data:image/jpg;base64,{crop_b64}",
-                         style={"width": "100%", "maxWidth": "400px",
-                                "borderRadius": "6px"}),
-                width=6
-            ),
-            dbc.Col([
-                html.H5("Métricas", className="text-white mb-2"),
-                html.Div(cards, style={"display": "flex", "flexWrap": "wrap"}),
-                dcc.Graph(figure=fig)
-            ], width=6)
-        ], align="start"),
-        html.Hr(className="border-secondary"),
-        dbc.Row(
-            dbc.Col(
-                html.Img(src=f"data:image/jpg;base64,{vis_b64}",
-                         style={"width": "100%", "maxWidth": "800px",
-                                "borderRadius": "6px"}),
-                width={"size": 8, "offset": 2}
+            zip_link = create_zip(vis_b64, data, "sagittal_analysis.zip")
+            report_buf = build_report(base64.b64decode(vis_b64), data,
+                                      atleta="Atleta", vista="Sagital")
+            report_b64 = base64.b64encode(report_buf.getvalue()).decode()
+            report_link = html.A(
+                "📄 Descargar informe (.docx)",
+                href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
+                download="informe_sagital.docx",
+                className="btn btn-success mt-2"
             )
-        ),
-        html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
-    ])
+
+            out_sag = html.Div([
+                dbc.Row([
+                    dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
+                                     style={"width": "100%", "maxWidth": MAX_W_UI_SAG, "borderRadius": "6px"}), width=6),
+                    dbc.Col([
+                        html.H5("Métricas", className="text-white mb-2"),
+                        html.Div(cards, style={"display": "flex", "flexWrap": "wrap"})
+                    ], width=6)
+                ], align="start"),
+                html.Hr(className="border-secondary"),
+                dbc.Row(
+                    dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
+                                     style={"width": "100%", "maxWidth": MAX_W_UI_SAG, "borderRadius": "6px"}),
+                            width={"size": 8, "offset": 2})
+                ),
+                html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
+            ])
+            return out_sag, no_update
+        except Exception as e:
+            return dbc.Alert(f"Error: {str(e)}", color="danger"), no_update
+
+    if triggered_id == "up-front" and front_content:
+        try:
+            img = b64_to_cv2(front_content)
+            crop, vis, data = analyze_frontal(img)
+            if crop is None:
+                return no_update, dbc.Alert("⚠️ No se detectó pose en imagen frontal.", color="warning")
+
+            cards = [card(k, v) for k, v in data.items()]
+            crop_b64 = cv2_to_b64(crop)
+            vis_b64 = cv2_to_b64(vis)
+
+            zip_link = create_zip(vis_b64, data, "frontal_analysis.zip")
+            report_buf = build_report(base64.b64decode(vis_b64), data,
+                                      atleta="Atleta", vista="Frontal")
+            report_b64 = base64.b64encode(report_buf.getvalue()).decode()
+            report_link = html.A(
+                "📄 Descargar informe (.docx)",
+                href=f"data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,{report_b64}",
+                download="informe_frontal.docx",
+                className="btn btn-success mt-2"
+            )
+
+            out_front = html.Div([
+                dbc.Row([
+                    dbc.Col(html.Img(src=f"data:image/jpg;base64,{crop_b64}",
+                                     style={"width": "100%", "maxWidth": "400px", "borderRadius": "6px"}), width=6),
+                    dbc.Col([
+                        html.H5("Métricas", className="text-white mb-2"),
+                        html.Div(cards, style={"display": "flex", "flexWrap": "wrap"})
+                    ], width=6)
+                ], align="start"),
+                html.Hr(className="border-secondary"),
+                dbc.Row(
+                    dbc.Col(html.Img(src=f"data:image/jpg;base64,{vis_b64}",
+                                     style={"width": "100%", "maxWidth": "800px", "borderRadius": "6px"}),
+                            width={"size": 8, "offset": 2})
+                ),
+                html.Div([zip_link, report_link], className="mt-3 d-flex gap-3")
+            ])
+            return no_update, out_front
+        except Exception as e:
+            return no_update, dbc.Alert(f"Error: {str(e)}", color="danger")
+
+    raise PreventUpdate
+
 
 
 # —————————————————————————————
@@ -551,6 +531,31 @@ def create_zip(img_b64: str, metrics_dict: dict, zip_filename: str) -> html.A:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    print(f"✅ App levantando en http://127.0.0.1:{port}/")
+    app.run(host="0.0.0.0", port=port, debug=True)
+import time
+print("⏳ Esperando...")
+time.sleep(5)
+print("✅ Terminó sleep. Fin del archivo.")
+
+from apscheduler.schedulers.background import BackgroundScheduler
+import requests
+
+def ping_self():
+    try:
+        url = os.environ.get("RENDER_EXTERNAL_URL")
+        if url:
+            requests.get(url)
+            print("🔄 Keep-alive ping enviado.")
+    except Exception as e:
+        print(f"⚠️ Error en keep-alive: {e}")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(ping_self, "interval", minutes=14)  # cada 14 minutos
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
+
+
+
 
 

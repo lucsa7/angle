@@ -12,6 +12,29 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from PIL import Image
+
+def resize_image_for_docx(img_bytes: bytes) -> BytesIO:
+    """
+    Redimensiona y comprime la imagen para insertar en DOCX sin sobrecargar memoria.
+    """
+    from PIL import Image
+    original = Image.open(BytesIO(img_bytes)).convert("RGB")
+    
+    # Redimensionar si excede ancho máximo
+    max_width = 1200
+    if original.width > max_width:
+        ratio = max_width / original.width
+        new_size = (int(original.width * ratio), int(original.height * ratio))
+        original = original.resize(new_size, Image.LANCZOS)
+
+    # Comprimir a JPEG de buena calidad
+    buf = BytesIO()
+    original.save(buf, format="JPEG", quality=85)
+    buf.seek(0)
+    return buf
+
+
 
 # ─────────── Utilidad interna: sombrear celdas ────────────────
 def _shade(cell, hex_color: str = "FFFFFF"):
@@ -31,7 +54,7 @@ class MetricInfo:
     type: str                                # "angle", "distance", "ratio"
     note: str                                # comentario / referencia
 
-# --- Tabla de referencia (idéntica a la tuya, se conserva) ---
+# --- Tabla de referencia: SAGITAL + FRONTAL ---
 METRIC_DB: Dict[str, MetricInfo] = {
     # ---------- VISTA SAGITAL ----------
     "Hip flex": MetricInfo(opt=(45, 120),  acc=(35, 120),  type="angle",
@@ -44,7 +67,8 @@ METRIC_DB: Dict[str, MetricInfo] = {
                                 note="Alineación tronco–tibia (Glassbrook 2017)."),
     "Ankle DF": MetricInfo(opt=(15, 40), acc=(10, 40), type="angle",
                            note="Dorsiflexión reduce compensaciones (Fry 2003)."),
-    # ---------- VISTA FRONTAL ----------
+
+    # ---------- VISTA FRONTAL ORIGINAL ----------
     "Apertura rodillas": MetricInfo(opt=(120, 9_999), acc=(80, 9_999), type="distance",
                                     note="Espacio de cadera adecuado (Escamilla 2001)."),
     "Apertura pies": MetricInfo(opt=(110, 9_999), acc=(70, 9_999), type="distance",
@@ -59,6 +83,22 @@ METRIC_DB: Dict[str, MetricInfo] = {
                                    note="Rotación externa moderada (Consensus 2020)."),
     "Right Foot ER (°)": MetricInfo(opt=(5, 30), acc=(0, 40), type="angle",
                                     note="Interpretación igual que lado izquierdo."),
+
+    # ---------- NUEVAS MÉTRICAS DE VISTA FRONTAL ----------
+    "Left knee": MetricInfo(opt=(60, 120), acc=None, type="angle",
+                            note="Ángulo de flexión de rodilla izquierda, ideal entre 60° y 120° para una sentadilla funcional."),
+    "Right knee": MetricInfo(opt=(60, 120), acc=None, type="angle",
+                             note="Ángulo de flexión de rodilla derecha, ideal entre 60° y 120° para una sentadilla funcional."),
+    "Hip level Δ": MetricInfo(opt=(0, 5), acc=None, type="distance",
+                              note="Diferencia vertical entre ambas caderas. Valores bajos indican buena simetría postural."),
+    "Shoulder level Δ": MetricInfo(opt=(0, 5), acc=None, type="distance",
+                                   note="Diferencia de altura entre hombros. Idealmente cercana a 0 para control y alineación torácica."),
+    "Wrist level Δ": MetricInfo(opt=(0, 10), acc=None, type="distance",
+                                note="Diferencia vertical entre muñecas. Indica si la barra está nivelada durante el overhead."),
+    "Feet spread": MetricInfo(opt=(50, 160), acc=None, type="distance",
+                              note="Separación entre pies. Una base adecuada mejora la estabilidad en la sentadilla."),
+    "Wrist spread": MetricInfo(opt=(100, 220), acc=None, type="distance",
+                               note="Distancia horizontal entre muñecas. Sugiere control postural en el agarre overhead.")
 }
 
 # ───────────── Interpretación de métricas ──────────────────────
@@ -88,11 +128,11 @@ def interpret_metrics(data: Dict[str, float]) -> List[Tuple[str, float, str, str
         elif info.type == "distance" and "Apertura" in k:
             estado = (
                 "Óptimo" if v >= info.opt[0] else
-                "Aceptable" if v >= info.acc[0] else
+                "Aceptable" if info.acc and v >= info.acc[0] else
                 "Revisar"
             )
 
-        elif info.type == "distance":  # absoluto
+        elif info.type == "distance":
             estado = (
                 "Óptimo" if info.opt[0] <= v <= info.opt[1] else
                 "Aceptable" if info.acc and info.acc[0] <= v <= info.acc[1] else
@@ -113,6 +153,7 @@ def interpret_metrics(data: Dict[str, float]) -> List[Tuple[str, float, str, str
 
         results.append((k, v, estado, info.note))
     return results
+
 
 # ───────────── Generador de informe DOCX ───────────────────────
 def build_report(img_bytes: bytes,
@@ -137,9 +178,10 @@ def build_report(img_bytes: bytes,
     doc.add_paragraph("STA METHODOLOGIES").style = "Subtitle"
 
     # ——— Imagen (mismo tamaño que versión original) ———
-    pic_width = Inches(1.5) if vista.lower().startswith("sag") else Inches(2.5)
-    tmp = BytesIO(img_bytes); tmp.seek(0)
-    doc.add_picture(tmp, width=pic_width)
+    #resized_img_buf = resize_image_for_docx(img_bytes)
+    #doc.add_picture(resized_img_buf, width=Inches(4.5))
+    #resized_img_buf.close()
+
 
     # ——— Tabla de resultados ———
     results = interpret_metrics(data)
