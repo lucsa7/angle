@@ -114,7 +114,7 @@ def analyze_sagital(img):
     seg  = get_seg()
 
     try:
-        # 1) Pose inicial
+        # 1) Pose global
         res1 = pose.process(img)
         if not res1.pose_landmarks:
             return None, None, {}
@@ -129,21 +129,25 @@ def analyze_sagital(img):
 
         lm2 = res2.pose_landmarks.landmark
 
-        # 3) Puntos relevantes
+        # 3) Puntos
         side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
         pick  = lambda L, R: R if side == "R" else L
         ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
                  for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
         SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
 
-        # 4) Ángulos
+        # 4) Ángulos principales
         hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
         knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
         shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
         trunk_tib  = abs(hip_flex - knee_flex)
-        raw_heel   = angle_between(np.array(KNp)-ANp, np.array(HEp)-ANp) - 90
-        raw_toe    = angle_between(np.array(KNp)-ANp, np.array(FTp)-ANp) - 90
-        ankle_df   = (abs(raw_heel) + abs(raw_toe)) / 2
+
+        # --- NUEVO CÁLCULO DE DORSIFLEXIÓN ---
+        tibia_vec  = np.array(KNp) - np.array(ANp)            # tibia
+        foot_vec   = np.array(FTp) - np.array(ANp)            # punta del pie
+        raw_angle  = angle_between(tibia_vec, foot_vec)       # ángulo tibia-pie
+        ankle_df   = max(0, 90 - raw_angle)                   # 0° = neutral; ↑ = +DF
+        # -------------------------------------
 
         data = {
             "Hip flex":      hip_flex,
@@ -159,11 +163,12 @@ def analyze_sagital(img):
         blur = cv2.GaussianBlur(crop, (17, 17), 0)
         vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
 
-        # 6) Dibujos finos + texto
+        # 6) Ángulos dibujados
         for name, (A, B, C) in [
             ("Hip flex",      (SHp, HIp, KNp)),
             ("Knee flex",     (HIp, KNp, ANp)),
-            ("Shoulder flex", (HIp, SHp, WRp))
+            ("Shoulder flex", (HIp, SHp, WRp)),
+            ("Ankle DF",      (KNp, ANp, FTp))   # ← se dibuja también el tobillo
         ]:
             cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
             cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
@@ -175,22 +180,12 @@ def analyze_sagital(img):
             cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
-        # 7) Tobillo
-        cv2.line(vis, KNp, ANp, CLR_LINE, 4)
-        cv2.line(vis, HEp, FTp, CLR_LINE, 4)
-        for pt in (KNp, ANp, HEp, FTp):
-            cv2.circle(vis, pt, 6, CLR_PT, -1)
-        txt = f"{ankle_df:.1f}"
-        cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 3, cv2.LINE_AA)
-        cv2.putText(vis, txt, (ANp[0] + 12, ANp[1] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-
         return crop, vis, data
 
     finally:
         pose.close()
         seg.close()
+
 
 
 def analyze_frontal(img):
