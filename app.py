@@ -575,6 +575,7 @@ print("✅ Terminó sleep. Fin del archivo.")
 from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 
+
 def ping_self():
     try:
         url = os.environ.get("RENDER_EXTERNAL_URL")
