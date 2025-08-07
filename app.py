@@ -129,26 +129,26 @@ def analyze_sagital(img):
 
         lm2 = res2.pose_landmarks.landmark
 
-        # 3) Puntos
-        side  = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
-        pick  = lambda L, R: R if side == "R" else L
-        ids   = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-                 for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
-        SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x*w), int(lm2[i].y*h)) for i in ids]
+        # 3) Puntos clave
+        side = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
+        pick = lambda L, R: R if side == "R" else L
+        ids = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
+               for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
+        SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x * w), int(lm2[i].y * h)) for i in ids]
 
-        # 4) Ángulos principales
-        hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
-        knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
-        shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
+        # 4) Ángulos biomecánicos
+        hip_flex   = angle_between(np.array(SHp) - HIp, np.array(KNp) - HIp)
+        knee_flex  = angle_between(np.array(HIp) - KNp, np.array(ANp) - KNp)
+        shld_flex  = angle_between(np.array(HIp) - SHp, np.array(WRp) - SHp)
         trunk_tib  = abs(hip_flex - knee_flex)
 
-        # --- NUEVO CÁLCULO DE DORSIFLEXIÓN ---
-        tibia_vec  = np.array(KNp) - np.array(ANp)            # tibia
-        foot_vec   = np.array(FTp) - np.array(ANp)            # punta del pie
-        raw_angle  = angle_between(tibia_vec, foot_vec)       # ángulo tibia-pie
-        ankle_df   = max(0, 90 - raw_angle)                   # 0° = neutral; ↑ = +DF
-        # -------------------------------------
+        # ✅ Dorsiflexión real (ángulo tibia–pie)
+        tibia_vec = np.array(KNp) - np.array(ANp)
+        foot_vec  = np.array(FTp) - np.array(ANp)
+        angle     = angle_between(tibia_vec, foot_vec)
+        ankle_df  = max(0, 90 - angle)  # 0° = neutro, ↑ = más dorsiflexión
 
+        # 5) Diccionario de salida
         data = {
             "Hip flex":      hip_flex,
             "Knee flex":     knee_flex,
@@ -157,18 +157,18 @@ def analyze_sagital(img):
             "Ankle DF":      ankle_df
         }
 
-        # 5) Fondo difuminado
+        # 6) Fondo difuminado
         seg_result = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
         mask = seg_result.segmentation_mask > 0.6
         blur = cv2.GaussianBlur(crop, (17, 17), 0)
-        vis  = np.where(mask[..., None], crop, blur).astype(np.uint8)
+        vis = np.where(mask[..., None], crop, blur).astype(np.uint8)
 
-        # 6) Ángulos dibujados
+        # 7) Dibujos de ángulos (incluyendo tobillo con nueva lógica)
         for name, (A, B, C) in [
             ("Hip flex",      (SHp, HIp, KNp)),
             ("Knee flex",     (HIp, KNp, ANp)),
             ("Shoulder flex", (HIp, SHp, WRp)),
-            ("Ankle DF",      (KNp, ANp, FTp))   # ← se dibuja también el tobillo
+            ("Ankle DF",      (KNp, ANp, FTp))
         ]:
             cv2.arrowedLine(vis, B, A, (255, 0, 0), 3, tipLength=0.1)
             cv2.arrowedLine(vis, B, C, (255, 0, 0), 3, tipLength=0.1)
