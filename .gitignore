@@ -1,7 +1,10 @@
 # Ignorar entorno virtual
-env/
 .venv/
+.env/
+env/
 Lib/
+*.pyd
+
 
 # Archivos temporales
 __pycache__/
