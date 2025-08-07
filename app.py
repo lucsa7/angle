@@ -120,35 +120,38 @@ def analyze_sagital(img):
             return None, None, {}
 
         crop = crop_person(img, res1.pose_landmarks.landmark)
-        h, w = crop.shape[:2]
 
         # 2) Pose sobre el recorte
         res2 = pose.process(crop)
-        if not res2.pose_landmarks:
-            return None, None, {}
+        if res2.pose_landmarks:
+            lm2 = res2.pose_landmarks.landmark
+            h, w = crop.shape[:2]
+            img_used = crop
+        else:
+            lm2 = res1.pose_landmarks.landmark
+            h, w = img.shape[:2]
+            img_used = img
 
-        lm2 = res2.pose_landmarks.landmark
-
-        # 3) Puntos clave
+        # 3) Puntos
         side = "R" if lm2[P.RIGHT_HIP].visibility >= lm2[P.LEFT_HIP].visibility else "L"
         pick = lambda L, R: R if side == "R" else L
-        ids = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
-               for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
+        ids  = [pick(getattr(P, f"LEFT_{n}"), getattr(P, f"RIGHT_{n}"))
+                for n in ("SHOULDER", "HIP", "KNEE", "ANKLE", "HEEL", "FOOT_INDEX", "WRIST")]
         SHp, HIp, KNp, ANp, HEp, FTp, WRp = [(int(lm2[i].x * w), int(lm2[i].y * h)) for i in ids]
 
-        # 4) Ángulos biomecánicos
-        hip_flex   = angle_between(np.array(SHp) - HIp, np.array(KNp) - HIp)
-        knee_flex  = angle_between(np.array(HIp) - KNp, np.array(ANp) - KNp)
-        shld_flex  = angle_between(np.array(HIp) - SHp, np.array(WRp) - SHp)
+        # 4) Ángulos principales
+        hip_flex   = angle_between(np.array(SHp)-HIp, np.array(KNp)-HIp)
+        knee_flex  = angle_between(np.array(HIp)-KNp, np.array(ANp)-KNp)
+        shld_flex  = angle_between(np.array(HIp)-SHp, np.array(WRp)-SHp)
         trunk_tib  = abs(hip_flex - knee_flex)
 
-        # ✅ Dorsiflexión real (ángulo tibia–pie)
-        tibia_vec = np.array(KNp) - np.array(ANp)
-        foot_vec  = np.array(FTp) - np.array(ANp)
-        angle     = angle_between(tibia_vec, foot_vec)
-        ankle_df  = max(0, 90 - angle)  # 0° = neutro, ↑ = más dorsiflexión
+        # --- NUEVO CÁLCULO DE DORSIFLEXIÓN ---
+        tibia_vec  = np.array(KNp) - np.array(ANp)
+        foot_vec   = np.array(FTp) - np.array(ANp)
+        raw_angle  = angle_between(tibia_vec, foot_vec)
+        ankle_df   = max(0, 90 - raw_angle)
+        # --------------------------------------
 
-        # 5) Diccionario de salida
         data = {
             "Hip flex":      hip_flex,
             "Knee flex":     knee_flex,
@@ -157,13 +160,13 @@ def analyze_sagital(img):
             "Ankle DF":      ankle_df
         }
 
-        # 6) Fondo difuminado
-        seg_result = seg.process(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
+        # 5) Fondo difuminado
+        seg_result = seg.process(cv2.cvtColor(img_used, cv2.COLOR_RGB2BGR))
         mask = seg_result.segmentation_mask > 0.6
-        blur = cv2.GaussianBlur(crop, (17, 17), 0)
-        vis = np.where(mask[..., None], crop, blur).astype(np.uint8)
+        blur = cv2.GaussianBlur(img_used, (17, 17), 0)
+        vis  = np.where(mask[..., None], img_used, blur).astype(np.uint8)
 
-        # 7) Dibujos de ángulos (incluyendo tobillo con nueva lógica)
+        # 6) Ángulos dibujados
         for name, (A, B, C) in [
             ("Hip flex",      (SHp, HIp, KNp)),
             ("Knee flex",     (HIp, KNp, ANp)),
@@ -180,7 +183,7 @@ def analyze_sagital(img):
             cv2.putText(vis, txt, (B[0] + 12, B[1] - 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
 
-        return crop, vis, data
+        return img_used, vis, data
 
     finally:
         pose.close()
@@ -273,6 +276,7 @@ app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.FLATLY
 app.title = "Overhead-Squat Analyzer"
 
 app.layout = dbc.Container([
+
     # — Navbar igual —
     dbc.Navbar(
         dbc.Container([
@@ -281,66 +285,56 @@ app.layout = dbc.Container([
         ]),
         color="light", dark=False, className="mb-4"
     ),
-    # — Sección educativa ampliada con ejemplos —
+
+    # — Sección educativa —
     dbc.Card([
         dbc.CardHeader(" ¿Cómo calculamos las métricas?"),
         dbc.CardBody([
             html.Ul([
                 html.Li("MediaPipe detecta puntos clave en la silueta: hombros, caderas, rodillas, tobillos, talón y punta de pie."),
-
                 html.Li("Convertimos esas posiciones normalizadas (0–1) a píxeles, multiplicando por el ancho y alto del área recortada."),
-
                 html.Li([
                     html.B("Vista Sagital (de lado):"),
                     html.Ul([
-                        html.Li("**Hip flex**: imagina dos palos unidos en la cadera. Uno va hasta el hombro, otro hasta la rodilla. Medimos el ángulo que forman en la cadera, como abrir o cerrar una puerta."),
-
-                        html.Li("**Knee flex**: lo mismo en la rodilla: un palo de cadera a rodilla y otro de rodilla a tobillo, mide cuánto dobla la pierna."),
-
-                        html.Li("**Shoulder flex**: palo de cadera a hombro y palo de hombro a muñeca, para ver cuánto levantas el brazo."),
-
-                        html.Li("**Trunk–Tibia**: restamos el número de Hip flex menos el de Knee flex y tomamos el valor absoluto, así vemos si tu tronco y tibia están bien alineados o si se desvían."),
-
-                        html.Li("**Ankle DF**: hacemos dos ángulos en el tobillo, uno con el talón y otro con la punta del pie. A cada uno le restamos noventa grados para referirlo a la vertical, y luego promediamos ambos valores para tener la dorsiflexión final.")
+                        html.Li("**Hip flex**: ángulo entre hombro, cadera y rodilla."),
+                        html.Li("**Knee flex**: ángulo entre cadera, rodilla y tobillo."),
+                        html.Li("**Shoulder flex**: ángulo entre cadera, hombro y muñeca."),
+                        html.Li("**Trunk–Tibia**: diferencia entre ángulo de cadera y rodilla."),
+                        html.Li("**Ankle DF**: dorsiflexión entre tibia y pie."),
                     ])
                 ]),
-
                 html.Li([
                     html.B("Vista Frontal (de frente):"),
                     html.Ul([
-                        html.Li("**Simetría de altura**: comparamos la altura de hombros, caderas y muñecas. Restamos la coordenada vertical (Y) de cada lado: si da cero, están al mismo nivel."),
-
-                        html.Li("**Apertura de rodillas**: restamos la posición horizontal (X) de la rodilla derecha menos la izquierda. Así medimos cuán separadas las tienes."),
-
-                        html.Li("**Apertura de pies**: igual, pero con los tobillos. Una base más ancha da más estabilidad."),
-
-                        html.Li("**Interpretación**: cuanto más cerca de cero salgan estas diferencias, mejor tu alineación y equilibrio lateral.")
+                        html.Li("Simetría de altura entre hombros, caderas y muñecas."),
+                        html.Li("Apertura de rodillas y tobillos."),
+                        html.Li("Interpretación: alineación cuanto más cerca de 0."),
                     ])
                 ]),
-
                 html.Li([
                     html.B("Ejemplo práctico:"),
                     html.Ul([
-                        html.Li("Si tu Hip flex es 50 y tu Knee flex 45, entonces Trunk–Tibia = |50 – 45| = 5 (perfecta alineación si es bajo)."),
-                        html.Li("Si tus tobillos están a 30 píxeles de separación, sabrás cuán ancha es tu base de apoyo.")
+                        html.Li("Hip flex = 50, Knee flex = 45 → Trunk–Tibia = 5 (alineado)."),
+                        html.Li("Tobillos separados 30 píxeles = base de apoyo ancha."),
                     ])
                 ])
             ])
         ])
     ], color="info", inverse=True, className="mb-4"),
+
     html.Div([
-    dbc.Button("🔄 Nuevo análisis", id="btn-reset", color="danger", className="mb-4")
-], className="text-center"),
+        dbc.Button("🔄 Nuevo análisis", id="btn-reset", color="danger", className="mb-4")
+    ], className="text-center"),
 
-
-    # — Título y descripción —  
+    # — Título y descripción —
     html.Div([
         html.H5("¿Qué métricas medimos?", className="text-secondary text-center"),
         html.P("Ángulos siempre positivos y aperturas en vista frontal.", className="text-center")
     ], className="mb-4"),
 
-    # — Row principal con dos columnas idénticas —  
+    # — Row principal con dos columnas —
     dbc.Row([
+
         # Columna Sagital
         dbc.Col([
             html.H5("Sagittal View", className="text-secondary text-center mb-2"),
@@ -349,7 +343,28 @@ app.layout = dbc.Container([
                 children=dbc.Button("Upload Sagittal Image", color="primary", className="w-100"),
                 multiple=False
             ),
-            dbc.Spinner(html.Div(id="out-sag")),
+            dbc.Spinner(html.Div([
+                html.Div(id="sagital-metrics"),
+                html.Img(id="img-crop-sag", style={
+                    "maxWidth": "100%",
+                    "maxHeight": "600px",
+                    "height": "auto",
+                    "display": "block",
+                    "margin": "auto",
+                    "border": "2px solid #ccc",
+                    "borderRadius": "10px"
+                }),
+                html.Br(),
+                html.Img(id="img-vis-sag", style={
+                    "maxWidth": "100%",
+                    "maxHeight": "600px",
+                    "height": "auto",
+                    "display": "block",
+                    "margin": "auto",
+                    "border": "2px solid #999",
+                    "borderRadius": "10px"
+                })
+            ]))
         ], md=6, style={'minHeight': '600px'}),
 
         # Columna Frontal
@@ -360,13 +375,35 @@ app.layout = dbc.Container([
                 children=dbc.Button("Upload Frontal Image", color="primary", className="w-100"),
                 multiple=False
             ),
-            dbc.Spinner(html.Div(id="out-front")),
-        ], md=6, style={'minHeight': '600px'}),
+            dbc.Spinner(html.Div([
+                html.Div(id="frontal-metrics"),
+                html.Img(id="img-crop-front", style={
+                    "maxWidth": "100%",
+                    "maxHeight": "600px",
+                    "height": "auto",
+                    "display": "block",
+                    "margin": "auto",
+                    "border": "2px solid #ccc",
+                    "borderRadius": "10px"
+                }),
+                html.Br(),
+                html.Img(id="img-vis-front", style={
+                    "maxWidth": "100%",
+                    "maxHeight": "600px",
+                    "height": "auto",
+                    "display": "block",
+                    "margin": "auto",
+                    "border": "2px solid #999",
+                    "borderRadius": "10px"
+                })
+            ]))
+        ], md=6, style={'minHeight': '600px'})
+
     ], justify="center", className="g-4 mb-4"),
 
     html.Hr(),
 
-    # — Footer —  
+    # — Footer —
     dbc.Row(
         dbc.Col(
             html.Div("Powered by STA METHODOLOGIES • Luciano Sacaba",
@@ -374,6 +411,7 @@ app.layout = dbc.Container([
             width=12
         )
     )
+
 ], fluid=True)
 
 
